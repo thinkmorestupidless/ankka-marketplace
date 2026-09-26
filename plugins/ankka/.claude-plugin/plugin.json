@@ -1,6 +1,6 @@
 {
   "name": "ankka",
-  "version": "0.0.0",
+  "version": "0.6.3",
   "description": "The ankka documentation as skills — design, entities, views and consumers, workflows, agents, endpoints, Python, deploying, the platform — and the ankka mcp server.",
   "author": {
     "name": "thinkmorestupidless",
