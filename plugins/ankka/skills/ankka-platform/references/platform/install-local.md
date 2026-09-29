@@ -21,6 +21,11 @@ inside the cluster, and the base domain resolves to `127.0.0.1`.
 - A checkout of the ankka repository. Every command on this page runs from its root.
 - Optionally [just](https://github.com/casey/just), for the short forms of the commands.
 
+Nothing more is needed for services built to WebAssembly modules. A wasm service's pod copies its module
+into a shared volume by running the service's own image as an init container, so it works on any
+container runtime kind ships; the runtime that loads the module is the platform's own image, which the
+script already builds.
+
 ## Create the cluster
 
 ```bash
@@ -100,6 +105,15 @@ ankka login                      # user dev, password dev, in a browser
 Nothing on your machine is asked to trust the local certificate authority. The CLI is told about it
 with `config set ca`, and `curl` with `--cacert`. There is no option anywhere to skip certificate
 verification.
+
+## Open the console
+
+[The console](../operate/console.md) is at `https://console.127.0.0.1.sslip.io:8443`; sign in as `dev`
+with password `dev`. A browser shows it only once it trusts the local certificate authority, which the
+deploy script exported to `~/.ankka/local-ca.crt`. On macOS, open that file in Keychain Access and mark it
+trusted for SSL; remove it from the keychain when you tear the platform down.
+
+## The identity provider
 
 The identity provider's console is at `https://auth.127.0.0.1.sslip.io:8443/admin/`, as `admin` with
 password `admin`. Those credentials are public and belong to the local platform only; a cloud

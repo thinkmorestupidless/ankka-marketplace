@@ -90,10 +90,11 @@ Open the one a task needs; each is one topic and stands alone.
 
 ### Concepts
 
-- `references/concepts/polyglot.md` — How ankka hosts a service written in Python or TypeScript — the runtime runs beside the process as a sidecar, owning everything durable and distributed, while the process decides what each command does.
+- `references/concepts/polyglot.md` — How ankka hosts a service in Python, TypeScript or Rust — the runtime runs beside a process as a sidecar or loads a WebAssembly module, owning everything durable while the service's code decides.
 
 ### Build
 
+- `references/build/autonomous-agents.md` — Write an autonomous agent in Scala or Python — a task type with a typed result and rules, an agent that accepts it, running and reading tasks, watching an instance over server-sent events, and testing with a scripted model.
 - `references/build/serialization.md` — How ankka encodes state, events, arguments and messages as JSON under a named manifest, what the JSON looks like in every language, and how to change a stored type without breaking a journal.
 - `references/build/testing.md` — Test ankka components at two levels in Scala, Python and TypeScript — unit test kits that run a component with nothing else, and integration test kits that run the whole service against a real database — with scripted models for agents.
 
