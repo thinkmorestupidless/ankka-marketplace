@@ -18,9 +18,11 @@ every project in it.
 
 **A project groups services and gives them a namespace.** Each project gets its own Kubernetes namespace,
 and a service is addressed within its project: two projects may each have a service called `cart`. A
-project's services each get their own database, provisioned by the platform. Projects separate names and
-data, but not network traffic: a service in one project can call a service in another by its in-cluster
-address.
+project's services each get their own database, provisioned by the platform. A project is an identity
+boundary rather than a network one: a service in one project can open a connection to a service in
+another, and the callee's ACL decides from the caller's certificate whether to serve it — a certificate
+names both the project and the service. A project's databases and its services' cluster ports are closed
+to every other project. See [Networking and TLS](../platform/networking.md#what-the-network-admits).
 
 **A service is a deployment target**, described by its descriptor.
 
@@ -107,6 +109,12 @@ Disabling an organization suspends every service in its projects. Its members ca
 but every change is refused with a conflict. Enabling it again brings back exactly what was running: a
 service its members had paused stays paused. A suspended service reports `Suspended` rather than `Paused`,
 so it is always clear who stopped it.
+
+A platform administrator can also give an organization a **quota**: at most so many projects, services
+and instances. The organization keeps an exact record of what it holds, and the control plane refuses a
+project or a service that would exceed the quota at the moment it is asked for. Nothing that already runs
+is ever stopped by a quota, however it is lowered. See
+[Quotas](../platform/organizations.md#quotas).
 
 ## Every change is attributed
 
