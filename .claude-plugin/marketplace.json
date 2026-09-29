@@ -19,6 +19,12 @@
       "source": "./plugins/ankka-flow",
       "description": "The ankka-flow documentation as skills — designing pipelines of streamlets over Kafka, writing and testing a Python streamlet, deploying and operating pipelines on Kubernetes, and implementing the streamlet protocol in another language.",
       "version": "0.1.0"
+    },
+    {
+      "name": "satisfactory",
+      "source": "./plugins/satisfactory",
+      "description": "The satisfactory documentation as skills — the service and its API, the Scala client, using it from an ankka application, and writing a model.",
+      "version": "0.1.0"
     }
   ]
 }
