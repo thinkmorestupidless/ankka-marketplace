@@ -18,7 +18,7 @@
       "name": "ankka-flow",
       "source": "./plugins/ankka-flow",
       "description": "The ankka-flow documentation as skills — designing pipelines of streamlets over Kafka, writing and testing a Python streamlet, deploying and operating pipelines on Kubernetes, and implementing the streamlet protocol in another language.",
-      "version": "0.1.0"
+      "version": "0.2.0"
     },
     {
       "name": "satisfactory",
