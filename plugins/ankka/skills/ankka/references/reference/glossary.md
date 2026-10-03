@@ -91,6 +91,12 @@ The service that operates the platform: it records organizations, projects and s
 who may change them, and projects each service's desired state into an AnkkaService resource. It is itself an
 ankka service. The CLI is its client.
 
+### Delta
+
+One element of a graph as it now is, whole, at a version, or a tombstone marking it deleted: what a
+[graph consumer](#graph-consumer) publishes for each element a change leaves. Deltas follow the contract
+`ankka.graph-delta.v1`, and a reader applies one when its version is newer than what it holds.
+
 ### Descriptor
 
 The JSON document stating a service's desired state: its image, environment, port, size and instance count.
@@ -106,6 +112,15 @@ control plane when you change it, and reconciled towards by the operator.
 The value a handler returns: a description of what should happen, such as "persist this event, then reply
 with the new state". Building one performs no I/O; the runtime carries it out. This is why a component's logic
 can be tested with nothing running.
+
+### Element
+
+A node or an edge of a graph, identified by which of the two it is and its id. Nodes and edges are
+separate id spaces.
+
+### Element key
+
+The record key of every delta for one element: `node:<id>` or `edge:<id>`.
 
 ### Embedded hosting
 
@@ -137,6 +152,11 @@ expose`. A service is private until exposed.
 A counter on each service that increments on every apply and every restart. An observation states the
 generation it describes, so a late report about an older generation is discarded.
 
+### Graph consumer
+
+A consumer that publishes its source as a graph. Its handlers return the elements a change leaves, and
+each is published as a delta under its element key, at the change's sequence number.
+
 ### Guardrail
 
 A check on an agent's input or output text that can block it. Input guardrails run before the model sees the
@@ -156,6 +176,12 @@ it cannot be chosen.
 
 One running copy of a service: a pod on the platform, a process on a laptop. A service's instances form one
 cluster.
+
+### Judgment
+
+The answer to a set of typed questions about a state — a choice, a score, a yes or no — from a System One
+model, each answer with the probabilities behind it. An agent's handler can reply with one, and a judged
+guardrail refuses by one.
 
 ### Key value entity
 
@@ -242,9 +268,20 @@ platform accepts the same major and a minor no later than its own.
 A handler that only reads. It must return a read-only effect, so it cannot persist. The local console runs
 queries and never commands.
 
+### Question
+
+What a judgment asks: a choice among described options, a score on described levels, or a yes or no. A
+value declared once with a wire id, used both to ask and to read the typed answer.
+
 ### Read-only effect
 
 An effect that can reply or refuse but cannot persist events or change state. A query must return one.
+
+### Record key
+
+The key a published message has on the broker, which decides which messages are ordered together and
+which record a compacted topic keeps. It is the key a message names, and the message's subject when it
+names none. Separate from the subject, which says which entity a message is about.
 
 ### Refusal
 
@@ -295,6 +332,11 @@ value entity and a workflow it is stored directly.
 One unit of a workflow's work. A step runs, may call other components, and says what happens next: another
 step, a pause, the end, or a failure. Each transition is journaled before the next begins.
 
+### System One model
+
+A model that answers typed questions about a state with probabilities rather than writing text, quickly
+and cheaply. TypeSafe AI's Jev is one. See judgment.
+
 ### Timed action
 
 A component whose handlers the runtime calls later, when a timer fires. Timers are stored in the database, so
@@ -304,6 +346,11 @@ they outlive the process that set them, and a failed call is retried with backof
 
 A scheduled future call to a timed action, identified by a name. Scheduling again under the same name replaces
 it.
+
+### Tombstone
+
+A delta that marks an element deleted, at a version. The element stays in the graph, marked, so an older
+delta arriving late cannot bring it back.
 
 ### Tool
 

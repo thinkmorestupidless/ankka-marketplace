@@ -62,8 +62,10 @@ keeps its history as events and folds them into state; a key value entity keeps 
 
 ## Deletion, expiry and snapshots
 
-- `effects.persist(CheckedOut).deleteEntity()` persists the final event *before* deleting, so a view or
+- `effects.persist(Discarded).deleteEntity()` persists the final event *before* deleting, so a view or
   consumer downstream sees what happened rather than a vanished entity. Prefer that to a bare delete.
+  Delete only when the id should start again: an ending worth keeping (a checked-out cart) is a
+  persisted state whose handlers refuse further changes.
 - `.expireAfter(duration)` is the same deletion, deferred until the entity has been idle that long.
 - Snapshots change performance, never behaviour: every 100 events by default in Scala
   (`override def snapshotEvery`), never by default in Python (`snapshot_every`) or TypeScript (`static snapshotEvery`).
@@ -97,6 +99,9 @@ state in the module between commands. Register by value (`.register(ShoppingCart
 `result.replyValue` and the new state. Arguments and replies still round-trip through the entity's own
 serializers, so a missing codec fails here rather than on first deployment. Prove durability with the
 integration testkit and `restartService()`, which drops every entity from memory and forces a replay.
+Ask of every test whether it could pass while the behaviour it names is broken
+(`references/build/testing.md`, "A test must be able to fail"), and take expected values from the
+requirement, never from the handler's output.
 
 ## Mistakes to check for
 
@@ -123,4 +128,4 @@ Open the one a task needs; each is one topic and stands alone.
 - `references/build/key-value-entities.md` — Store only the latest value of a piece of state, replace it with updateState, delete or expire it, and decide when that is a better fit than event sourcing.
 - `references/build/component-client.md` — Call entities, workflows and agents through the component client — blocking or asynchronous, with typed refusals and timeouts — and query views through the view client.
 - `references/build/serialization.md` — How ankka encodes state, events, arguments and messages as JSON under a named manifest, what the JSON looks like in every language, and how to change a stored type without breaking a journal.
-- `references/build/testing.md` — Test ankka components at two levels in Scala, Python and TypeScript — unit test kits that run a component with nothing else, and integration test kits that run the whole service against a real database — with scripted models for agents.
+- `references/build/testing.md` — Test ankka components at two levels in Scala, Python, TypeScript and Rust, with unit test kits that run one component and nothing else, integration test kits that run the whole service against a real database, and scripted models.

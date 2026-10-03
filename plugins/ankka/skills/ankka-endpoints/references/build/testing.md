@@ -1,6 +1,6 @@
 # Testing
 
-> Test ankka components at two levels in Scala, Python and TypeScript — unit test kits that run a component with nothing else, and integration test kits that run the whole service against a real database — with scripted models for agents.
+> Test ankka components at two levels in Scala, Python, TypeScript and Rust, with unit test kits that run one component and nothing else, integration test kits that run the whole service against a real database, and scripted models.
 
 Source: https://docs.ankka.cloud/build/testing/
 ankka services are tested at two levels, and both are real.
@@ -55,7 +55,36 @@ test("adds an item and replies done", async () => {
 })
 ```
 
-Scala names the handler with the typed value its companion declared; Python and TypeScript name it
+**Rust**
+
+```rust
+#[test]
+fn adding_an_item_persists_it_and_the_cart_holds_it() {
+    let mut kit = EventSourcedTestKit::<ShoppingCart>::new("cart-1");
+    let outcome = kit.command("add-item", pen(2));
+    assert_eq!(
+        outcome.events,
+        vec![ShoppingCartEvent::ItemAdded { item: pen(2) }]
+    );
+    assert_eq!(outcome.reply::<Done>(), Ok(Done));
+    assert_eq!(kit.state().items, vec![pen(2)]);
+
+    // The same product again folds into one line.
+    kit.command("add-item", pen(1));
+    assert_eq!(kit.state().items, vec![pen(3)]);
+}
+
+#[test]
+fn a_refused_command_persists_nothing() {
+    let mut kit = EventSourcedTestKit::<ShoppingCart>::new("cart-1");
+    let refused = kit.command("add-item", pen(0));
+    assert!(refused.events.is_empty());
+    assert_eq!(refused.error().map(|e| e.code), Some(ErrorCode::BadRequest));
+    assert!(kit.state().items.is_empty());
+}
+```
+
+Scala names the handler with the typed value its companion declared; Python, TypeScript and Rust name it
 by its wire name or its handler reference. What each kit hands back differs a little by language.
 
 ### What a Scala kit gives you
@@ -87,9 +116,13 @@ assert(result.changed)
 assertEquals(kit.currentState, Profile("Ada", "ada@example.com", 1))
 ```
 
-Workflows, views, consumers, timed actions and agents are tested in Scala through the integration test
-kit, because what matters about them — transitions and recovery, projection, delivery, the agent loop —
-is the runtime's behaviour.
+`ConsumerTestKit.of(companion)` hands a consumer one change and returns what it would publish, and
+`ConsumerTestKit.graph(companion)` does the same for a [graph consumer](graph.md), returning its deltas;
+see [Testing a consumer](#testing-a-consumer).
+
+Workflows, views, timed actions and agents are tested in Scala through the integration test kit, because
+what matters about them — transitions and recovery, projection, the agent loop — is the runtime's
+behaviour.
 
 ### What a Python kit gives you
 
@@ -100,7 +133,8 @@ is the runtime's behaviour.
 | `KeyValueTestKit.of(Entity, id)` | commands on a key value entity |
 | `WorkflowTestKit.of(Workflow, id)` | `call` a command, `run_step` a step, `run_until_end` to follow transitions |
 | `ViewTestKit.of(View)` | `on_change(key, event)`, `on_delete(key)`, then `get(key)` for the row |
-| `ConsumerTestKit.of(Consumer)` | `on_message(message, subject)`, `on_delete(subject)` |
+| `ConsumerTestKit.of(Consumer)` | `on_message(message, subject, sequence=…)`, `on_delete(subject)`; `messages` holds what it published, each with the key it named |
+| `GraphConsumerTestKit.of(GraphConsumer, client)` | `on_message(message, subject, sequence=…)`, `on_delete(subject, sequence=…)`, each returning the elements published |
 | `TimedActionTestKit.of(Action)` | `call(name, input)` |
 | `AgentTestKit.of(Agent, session, model)` | a handler plus the loop the sidecar would run, against a `ScriptedModel` |
 | `EndpointTestKit.of(Endpoint, *args)` | `get`, `post`, `put`, `delete` against the routes, returning a `Response` |
@@ -150,13 +184,151 @@ def test_assistant_plans_and_the_tool_reads_the_cart() -> None:
 | `KeyValueTestKit.of(Entity, id)` | the same, with `changed` in place of `events` |
 | `WorkflowTestKit.of(Workflow, id)` | `call` a command, `runStep` a step, `runUntilEnd` and `resume` to follow transitions |
 | `ViewTestKit.of(View)` | `onChange(key, event)`, `onDelete(key)`, then `get(key)` for the row |
-| `ConsumerTestKit.of(Consumer)` | `onMessage(message, subject)`, `onDelete(subject)` |
+| `ConsumerTestKit.of(Consumer)` | `onMessage(message, subject, metadata)`, `onDelete(subject)`; `produced` holds what it published, each with the key it named |
+| `GraphConsumerTestKit.of(GraphConsumer, client)` | `onMessage(message, { subject, sequence })`, `onDelete({ subject, sequence })`, each returning the deltas published |
 | `TimedActionTestKit.of(Action)` | `invoke(action, input)` |
 | `AgentTestKit.of(Agent, session, model)` | a handler plus the loop the sidecar would run, against a `ScriptedModel` |
 | `EndpointTestKit.of(Endpoint)` | `get`, `post`, `put`, `delete` against the routes, returning a `Response` |
 
 `ScriptedModel` scripts turns with `expectText`, `expectToolCall` and `expectRefusal`, and fails loudly
 when the script runs out.
+
+### What a Rust kit gives you
+
+`ankka::testkit` holds a kit for each kind. They run natively, with `cargo test`, through the same
+dispatch the module's exports use:
+
+| Kit | Drives |
+|---|---|
+| `EventSourcedTestKit::<C>::new(id)` | `command(name, input)`; the outcome has `events`, `new_state`, `retention` and `reply::<R>()` |
+| `KeyValueEntityTestKit::<C>::new(id)` | commands on a key value entity |
+| `WorkflowTestKit::<C>::new(id)` | `command`, `run_step`, `run_to_end`, `resume`, `state` |
+| `ViewTestKit::<C>::new()` | `on_event(key, event)`, `on_deleted(key)`, then `row(key)` |
+| `ConsumerTestKit::<C>::new()` | `on_message(subject, message)`, `on_deleted(subject)`; `.at(sequence)` sets the sequence number, and `ConsumerTestKit::<C>::messages(&effect)` reads what an effect publishes, each message with its record key |
+| `GraphConsumerTestKit::<G>::new()` | `on_message(subject, sequence, message)`, `on_deleted(subject, sequence)`, each returning the elements published |
+| `EndpointTestKit::<E>::new()` | an endpoint's routes by method and path |
+
+A kit built `.with_service(build())` answers its component's calls to the service's event sourced
+entities in memory; without it those calls are refused.
+
+## Testing a consumer
+
+A consumer's unit test hands it one change, with a subject and a sequence number, and reads back the
+messages it would publish: each payload as its bytes decode, and the key each message named.
+Nothing is started. This consumer answers a checkout with three messages, the second under a key of its
+own:
+
+**Scala**
+
+```scala
+test("a checkout is answered with three messages, the second under a key of its own") {
+  val kit    = ConsumerTestKit.of(CheckoutFanout)
+  val result = kit.onMessage(CheckedOut, subject = "c1", sequenceNumber = 4)
+
+  assertEquals(result.payloads, Vector(Fanned(1), Fanned(2), Fanned(3)))
+  // The key each message named; the others are keyed by their subject, the cart's id.
+  assertEquals(result.keys, Vector(None, Some("second:c1"), None))
+  assertEquals(result.recordKeys, Vector(Some("c1"), Some("second:c1"), Some("c1")))
+  assertEquals(result.messages(2).metadata.get("x-n"), Some("3"))
+}
+```
+
+**Python**
+
+```python
+def test_the_reference_fans_a_checkout_out_into_three_messages() -> None:
+    from ankka import Metadata
+    from ankka.effects.consumer import Produce, ProduceAll
+    from ankka.testkit import Produced
+    from examples.shopping_cart.conformance import CheckoutFanout, Fanned
+
+    kit = ConsumerTestKit.of(CheckoutFanout)
+    assert kit.on_message(ItemAdded(PEN), "k1") == ProduceAll(())
+    assert isinstance(kit.on_message(ItemRemoved("p1"), "k1"), Produce)
+    assert kit.messages == [Produced(Fanned(0), None, Metadata())]
+    kit.on_message(CheckedOut(), "k1")
+    assert kit.messages[1:] == [
+        Produced(Fanned(1), None, Metadata()),
+        Produced(Fanned(2), "second:k1", Metadata()),
+        Produced(Fanned(3), None, Metadata().set("x-n", "3")),
+    ]
+    assert kit.on_message(Discarded(), "k1").__class__.__name__ == "Ignore"
+    assert CheckoutFanout.out_codec.encode(Fanned(2)) == b'{"n":2}'
+    assert CheckoutFanout.out_codec.manifest == "fanned"
+```
+
+**TypeScript**
+
+```ts
+test("a checkout fans out into three messages, the second under a key of its own", async () => {
+  const kit = ConsumerTestKit.of(CheckoutFanout)
+  // An item added answers with no messages; an item removed with one, keyed by its subject.
+  await kit.onMessage({ type: "ItemAdded", item: { productId: "p1", name: "Pen", quantity: 1 } }, "c1")
+  assert.deepEqual(kit.produced, [])
+  await kit.onMessage({ type: "CheckedOut" }, "c1", { "ankka.sequence": "4" })
+  assert.deepEqual(kit.produced, [
+    { payload: { n: 1 }, metadata: {} },
+    { payload: { n: 2 }, metadata: {}, key: "second:c1" },
+    { payload: { n: 3 }, metadata: { "x-n": "3" } },
+  ])
+})
+```
+
+**Rust**
+
+```rust
+/// The fan-out the suite's several-message cases read, as every reference publishes it.
+#[test]
+fn the_reference_fans_a_checkout_out_into_three_messages() {
+    let kit = ConsumerTestKit::<CheckoutFanout>::new().at(2);
+    let added = ShoppingCartEvent::ItemAdded {
+        item: LineItem {
+            product_id: "p1".into(),
+            name: "Pen".into(),
+            quantity: 1,
+        },
+    };
+    assert!(matches!(kit.on_message("c1", added), ConsumerEffect::Done));
+
+    let messages = ConsumerTestKit::<CheckoutFanout>::messages(
+        &kit.on_message("c1", ShoppingCartEvent::CheckedOut),
+    );
+    let ns: Vec<i32> = messages.iter().map(|m| m.read::<Fanned>().n).collect();
+    assert_eq!(ns, vec![1, 2, 3]);
+    let keys: Vec<Option<&str>> = messages.iter().map(|m| m.key.as_deref()).collect();
+    assert_eq!(keys, vec![None, Some("second:c1"), None]);
+    assert_eq!(messages[2].metadata.get("x-n"), Some("3"));
+    assert!(messages.iter().all(|m| m.payload.manifest == "fanned"));
+    assert_eq!(messages[0].payload.data, br#"{"n":1}"#);
+
+    // An item removed is one message, the old way, on a runtime of any version.
+    let removed = ShoppingCartEvent::ItemRemoved {
+        product_id: "p1".into(),
+    };
+    let earlier = ConsumerTestKit::<CheckoutFanout>::new().speaking(None);
+    match earlier.on_message("c1", removed) {
+        ConsumerEffect::Produce(Ok(payload), _) => {
+            assert_eq!(payload.manifest, "fanned");
+            assert_eq!(payload.data, br#"{"n":0}"#);
+        }
+        other => panic!("{other:?}"),
+    }
+    let discarded = kit.on_message("c1", ShoppingCartEvent::Discarded);
+    assert!(matches!(discarded, ConsumerEffect::Ignore));
+}
+```
+
+Every kit reports the key a message named, so a message that names none shows no key: it is keyed by
+its subject, the entity's id. The Scala result also has `recordKeys`, the key a broker is given for each.
+
+The consumer under test is [the one that publishes several messages](consumers.md#publishing-several-messages-for-one-change).
+A [graph consumer](graph.md#testing-a-graph-consumer) has a kit of its own in every language, which
+returns elements rather than messages.
+
+A consumer that calls other components is given a client that answers: a `TestTransport` with stubs in
+Scala, a client double in Python and TypeScript, and a kit built `.with_service(build())` in Rust. With
+none, the call is refused, the handler fails, and in a running service the change would be delivered
+again.
 
 ## Integration testing
 
@@ -206,8 +378,15 @@ async def test_cart_through_the_sidecar_survives_a_restart() -> None:
 
         checked = (await kit.http.post("/carts/c1/checkout")).json()
         assert checked["checkedOut"] is True
-        # Deleted after the checkout, as the Scala cart: the id is fresh again.
-        assert (await kit.http.get("/carts/c1")).json() == {"cartId": "c1", "items": [], "checkedOut": False}
+        # Kept after the checkout, as the Scala cart, and refusing changes after a restart too.
+        await kit.restart()
+        assert (await kit.http.get("/carts/c1")).json() == {"cartId": "c1", "items": [PEN_JSON, INK_JSON], "checkedOut": True}
+        assert (await kit.http.post("/carts/c1/items", json=PEN_JSON)).status_code == 409
+
+        # Discarding deletes a cart, so the id is fresh again.
+        assert (await kit.http.post("/carts/c2/items", json=PEN_JSON)).status_code == 204
+        assert (await kit.http.delete("/carts/c2")).status_code == 204
+        assert (await kit.http.get("/carts/c2")).json() == {"cartId": "c2", "items": [], "checkedOut": False}
 ```
 
 **TypeScript**
@@ -225,6 +404,69 @@ test("items survive the sidecar restarting", async () => {
     await kit.stop()
   }
 })
+```
+
+**Rust**
+
+```rust
+#[test]
+fn the_cart_through_the_runtime_survives_a_restart() {
+    let mut rt = AnkkaTestKit::start(Module::build().unwrap()).unwrap();
+    let http = rt.http().clone();
+    assert_eq!(
+        http.post("/carts/c1/items")
+            .json(&pen(2))
+            .send()
+            .unwrap()
+            .status,
+        204
+    );
+    assert_eq!(
+        http.post("/carts/c1/items")
+            .json(&ink())
+            .send()
+            .unwrap()
+            .status,
+        204
+    );
+    assert_eq!(
+        http.delete("/carts/c1/items/p2").send().unwrap().status,
+        204
+    );
+
+    // A new runtime on the same database: the cart comes back from the journal.
+    rt.restart().unwrap();
+    let cart: Cart = rt.http().get("/carts/c1").send().unwrap().json().unwrap();
+    assert_eq!(cart.items, vec![pen(2)]);
+
+    let checkout = rt.http().post("/carts/c1/checkout").send().unwrap();
+    assert_eq!(checkout.status, 200, "{}", checkout.text());
+    // Kept after the checkout, and refusing changes after a restart too.
+    rt.restart().unwrap();
+    let kept: Cart = rt.http().get("/carts/c1").send().unwrap().json().unwrap();
+    assert!(kept.checked_out);
+    assert_eq!(kept.items, vec![pen(2)]);
+    assert_eq!(
+        rt.http()
+            .post("/carts/c1/items")
+            .json(&ink())
+            .send()
+            .unwrap()
+            .status,
+        409
+    );
+
+    // Discarding deletes a cart, so the id is fresh again.
+    rt.http()
+        .post("/carts/c2/items")
+        .json(&ink())
+        .send()
+        .unwrap();
+    let discarded = rt.http().delete("/carts/c2").send().unwrap();
+    assert_eq!(discarded.status, 204, "{}", discarded.text());
+    let fresh: Cart = rt.http().get("/carts/c2").send().unwrap().json().unwrap();
+    assert_eq!(fresh, Cart::empty("c2"));
+}
 ```
 
 `restartService()` stops the service and starts a new one against the same database, so every entity
@@ -261,6 +503,132 @@ suite needs Docker by default.
 
 Mark such tests `@pytest.mark.slow` and run them with `uv run pytest -m slow`; `uv run pytest` runs the
 unit tests alone.
+
+### Quiet output from a Scala suite
+
+An integration test starts a whole service, and a service logs as it starts, forms its cluster, runs
+projections and stops. Across a suite that is hundreds of lines, none of which matter unless a test
+fails. Mix `LogCapturing` into a munit suite to hold that log back:
+
+```scala
+import com.thinkmorestupidless.ankka.testkit.LogCapturing
+
+class ShoppingCartIntegrationSuite extends munit.FunSuite with LogCapturing
+```
+
+While the suite runs, everything logged through logback's root logger is held in memory. A test that
+passes discards what was logged since the previous test finished. A test that fails prints it, under a
+header naming the test, so the log that explains the failure is still there. A suite whose `beforeAll`
+fails, so that no test runs, prints what its setup logged, and so does a test whose `beforeEach` fails.
+
+- **Levels still come from your logback configuration.** Capture changes where an event goes, not
+  whether it is logged, so a logger set to `WARN` is no noisier when a test fails.
+- **It ends when the suite does.** A suite without `LogCapturing` that runs after one with it, in the
+  same test JVM, logs as it always did. The suite's own `afterAll` runs after capture has ended, so what
+  a teardown logs is printed.
+- **Output printed directly** to standard output or standard error, not through a logger, is not
+  captured.
+- **To see everything**, as when a test passes and you want to know why, set `ANKKA_TEST_LOGS=all`, or
+  `-Dankka.test.logs=all` on the test JVM.
+
+## A test must be able to fail
+
+A test is worth what it would catch. Before relying on one, ask of it: **could this pass while the
+behaviour it names is broken?** If you can describe such a case, the test is not yet checking what its
+name says. The same question applies to any check that gates a change: a CI step, a smoke test, a
+readiness wait. These are the ways an ankka test most often passes for the wrong reason:
+
+- **Asserting a status and not the answer.** A `204` or a `200` says the request was handled, not that
+  it did the right thing, and a `404` from a mistyped path is a successful HTTP exchange. Assert the
+  body, or read the state the request should have changed.
+- **Retrying on the wrong thing.** A retry that waits for "a row exists" is satisfied by a row from an
+  earlier write. Retry on the value that changes, and assert what must not change.
+- **Proving memory instead of durability.** A test that writes and reads back without a restart passes
+  on state that was never persisted. A durability claim needs `restartService()` or `restart()` between
+  the write and the read.
+- **A test that never ran.** A filter that matches no test, a skip condition that is always true, or a
+  test marked slow that no run includes reports green for work that did not happen. Check the count of
+  tests run, not only the exit code.
+- **Asserting that something appears, not its shape.** A string found somewhere in a rendered document
+  or a response passes when it appears in the wrong place too. Assert the structure the behaviour must
+  produce.
+- **Deciding from a view what must be exact.** A view lags its source. A test that asserts on a view once,
+  immediately after a write, passes or fails by timing; read your own write from the entity.
+- **Checking the code against itself.** A test whose expected value was copied from the implementation's
+  output agrees with the implementation by construction. Take expected values from the requirement.
+
+The quickest proof that a test can fail is to break the behaviour on purpose and watch the test go red,
+then put it back.
+
+## Acceptance scenarios as integration tests
+
+An acceptance scenario — given some state, when a caller does something, then an answer and a resulting
+state — is an integration test waiting to be written. Written as one, it runs on every change, so the
+scenario keeps holding after the feature is finished, and a build that must pass its tests cannot ship a
+regression of it.
+
+Each part of the scenario has one place in the test:
+
+| Scenario | In the test |
+|---|---|
+| Given | calls that put the service in the starting state, on ids this test alone uses |
+| When | the request the scenario describes, through the same route a caller uses (`kit.http` or an HTTP client against the kit's port), so the endpoint's ACL and error mapping are part of what is tested |
+| Then, the answer | the status and the part of the body the scenario names |
+| Then, the state | a query to the entity through the component client or a route; a view or consumer effect by retrying on the value that changes |
+| Must survive a restart | `restartService()` or `restart()`, then the same reads |
+
+Name the test after the scenario, in the scenario's words, so a failure reads as the requirement that
+broke. A scenario that cannot be written this way, because nothing observable distinguishes "met" from
+"not met", is not yet a requirement a test can hold; it needs a sharper statement before it needs a test.
+
+### Scenarios written in Gherkin
+
+Scenarios can live in Gherkin `.feature` files, in the domain's own words, and run as a Scala suite.
+`GherkinSuite` makes each scenario a munit test, and each row of a `Scenario Outline`'s `Examples`
+its own test, named with its file and line:
+
+```gherkin
+Scenario: adding a product the cart already holds adds to that product's quantity
+  Given a cart holding 2 of "Widget"
+  When the customer adds 3 of "Widget"
+  Then the cart holds 5 of "Widget"
+  And the cart holds 5 items in total
+```
+
+Steps are defined with Cucumber Expressions, `{int}`, `{string}` and the rest, and a definition
+matches whatever keyword a step was written with. These drive the shopping cart through its HTTP routes,
+so a scenario checks the routes, the entity's rules and the journal together:
+
+```scala
+Given("a cart holding {int} of {string}") { (quantity: Int, product: String) =>
+  setUp(add(quantity, product))
+}
+
+When("the customer adds {int} of {string}") { (quantity: Int, product: String) =>
+  last = add(quantity, product)
+}
+
+Then("the cart holds {int} of {string}") { (quantity: Int, product: String) =>
+  assertEquals(quantityOf(product), quantity)
+}
+```
+
+The suite takes the directory of its features, relative to the working directory; a forked sbt test runs
+in its project's directory, so `GherkinSuite("features")` reads the project's own `features/`. It mixes
+in like any suite, `LogCapturing` included, and starts its service in `beforeAll` as the integration test
+kit does.
+
+- **An undefined step fails its scenario**, naming the step and its line and printing a definition to
+  paste. A step two definitions match fails too, naming both, and so does one whose values do not match
+  its definition's parameters.
+- **A directory with no scenarios fails the suite.** A suite that ran no scenarios has checked nothing.
+- **A scenario tagged `@ignore` is reported ignored**, never passed.
+- **Each scenario's state is its own**: `scenarioId` is unique to the running scenario, for entity ids no
+  other scenario uses. Scenarios run one at a time on one suite instance.
+- **A step's `DocString` or `DataTable` is the definition's last value**, as a `String` or a
+  `Seq[Seq[String]]`.
+- **Assert what the scenario names.** A refusal is checked by its status and by the entity's own message:
+  a status alone passes for any refusal of that kind, including the wrong one.
 
 ## Testing agents with a scripted model
 
@@ -317,6 +685,26 @@ Two rules keep scripted-model tests honest:
   Give each its own provider.
 - **Let a workflow finish before the test ends.** A workflow left mid-flight keeps taking responses from
   a shared script, starving the next test.
+
+### Scripting judgments
+
+`TestJudgmentProvider` does for [judgments](judgments.md) what `TestModelProvider` does for text, and it
+is a separate script, so neither consumes the other's. Give it to the runtime with
+`AgentRuntime.withDefaultModel(model).withJudgments(judge)`.
+
+| Method | Scripts |
+|---|---|
+| `expect(answers*)` | One judgment's answers, taken in order. |
+| `always(answers*)` | Standing answers by question, used whenever the question is asked without consuming the queue — for a guardrail asked on every request. |
+| `failNext(message, timedOut)` | One judgment that fails as a provider's outage would; each call queues one. |
+| `reporting(usage)` | The tokens every judgment reports; zero unless set. |
+
+`Answers.choice(question, value, confidence)`, `Answers.score(question, score)` and
+`Answers.yesNo(question, probability)` script an answer by its value, with probabilities and a confidence
+consistent with it; `Answers.choiceWith` and `Answers.scoreWith` take the full probabilities. Each is
+checked against its question as it is written. A question the script has no answer for, or an answer for a
+question that was not asked, fails the call naming the question. `requests`, `lastRequest` and `callCount`
+show what was asked, and `reset()` clears everything, the reported usage included.
 
 ### Scripting a model in Python and TypeScript
 

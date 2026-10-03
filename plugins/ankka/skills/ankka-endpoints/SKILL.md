@@ -81,7 +81,10 @@ status with `?`. The module never binds a port, and no route streams: a module a
 Run the service with `AnkkaTestKit`, register the server with `HttpServer.at("127.0.0.1", 0)`, and call
 the bound port with an HTTP client. Assert on statuses and bodies, including the status a refusal
 produces and the SSE encoding of a streaming route. A route's arity mismatch shows up at start, so a
-test that starts the service covers every route's shape.
+test that starts the service covers every route's shape. A status alone proves little — a `404` from a
+mistyped path is a successful exchange — so assert the body or the state the request changed, and write
+each acceptance scenario as one integration test through its route (`references/build/testing.md`,
+"Acceptance scenarios as integration tests").
 
 ## Mistakes to check for
 
@@ -106,7 +109,7 @@ Open the one a task needs; each is one topic and stands alone.
 - `references/build/streaming.md` — Stream an agent's reply token by token to a caller and over HTTP as server-sent events, and know what streaming changes about guardrails and sessions.
 - `references/build/http-endpoints.md` — Expose a service over HTTP — routes, typed path parameters and bodies, responses, errors, query parameters and headers, access control and server-sent events — in Scala, Python or TypeScript.
 - `references/build/component-client.md` — Call entities, workflows and agents through the component client — blocking or asynchronous, with typed refusals and timeouts — and query views through the view client.
-- `references/build/testing.md` — Test ankka components at two levels in Scala, Python and TypeScript — unit test kits that run a component with nothing else, and integration test kits that run the whole service against a real database — with scripted models for agents.
+- `references/build/testing.md` — Test ankka components at two levels in Scala, Python, TypeScript and Rust, with unit test kits that run one component and nothing else, integration test kits that run the whole service against a real database, and scripted models.
 
 ### Run and deploy
 

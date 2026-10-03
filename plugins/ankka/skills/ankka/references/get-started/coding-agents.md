@@ -11,20 +11,24 @@ Protocol (MCP) server built into the CLI, `ankka mcp`.
 ## The skills
 
 An Agent Skill is a directory an agent loads when a task needs it: a `SKILL.md` saying what it is for and
-the rules to hold, and reference files it opens on demand. ankka's documentation is rendered into ten
-skills, one per kind of task, so an agent writing an entity loads the entity rules and not the deployment
-guide:
+the rules to hold, and reference files it opens on demand. ankka's documentation is rendered into
+fourteen skills, one per kind of task, so an agent writing an entity loads the entity rules and not the
+deployment guide:
 
 | Skill | For |
 |---|---|
 | `ankka` | orientation: what ankka is, installing it, the first service, the SDK maps, limitations, differences from Akka |
-| `ankka-design` | decomposing a domain into components, where each rule lives, what may lag, service boundaries |
+| `ankka-design` | decomposing a domain into components, where each rule lives, what may lag, service boundaries, and the component table that records each choice and the alternative it beat |
+| `ankka-inspect` | checking a service running on this machine against its specification's acceptance scenarios, through its endpoints, its declared queries and its traces |
+| `ankka-port` | porting an existing system: recording what the running original does, a specification that says how each requirement was established, and parity tests that hold the rebuild to the recordings |
 | `ankka-entities` | event sourced and key value entities, serialization and evolution |
 | `ankka-views-consumers` | views, consumers and broker topics |
 | `ankka-workflows` | workflows, timers and timed actions |
 | `ankka-agents` | agents, tools, sessions, guardrails, models, streaming, multi-agent orchestration |
 | `ankka-endpoints` | HTTP endpoints, ACLs, errors, server-sent events |
 | `ankka-python` | a service in Python beside the sidecar |
+| `ankka-typescript` | a service in TypeScript on Node.js beside the sidecar |
+| `ankka-rust` | a service in Rust, built to a WebAssembly module the runtime loads |
 | `ankka-deploy` | the descriptor, the CLI, images, deploying, exposing, observing and troubleshooting |
 | `ankka-platform` | installing and administering the platform itself |
 
@@ -34,8 +38,9 @@ ankka build compiles and tests, so an agent that reads them writes current signa
 
 **In a project made from the template**, the skills are already there. `ankka init` and
 `sbt new thinkmorestupidless/ankka.g8` create `.claude/skills/` in the new project, holding the
-documentation of the ankka version the project was created with. Claude Code loads skills from that
-directory with no configuration. Other agents that read Agent Skills can be pointed at it.
+documentation of the ankka version the project was created with, and a `.mcp.json` that starts
+[the MCP server](#the-mcp-server). Claude Code loads both with no configuration. Other agents that read Agent
+Skills can be pointed at the skills directory.
 
 **In any other project**, install the Claude Code plugin from the ankka marketplace:
 
@@ -60,14 +65,34 @@ documentation as resources.
 | This machine | `list_local_services`, `describe_local_service`, `local_traces`, `query_local_entity`, `call_local_endpoint`, `local_agent_session` | services running locally |
 | Documentation | `search_docs`, `read_doc`, and every page as an `ankka://docs/<path>` resource | this CLI's version of the docs |
 
-To use it from Claude Code without the plugin, add it once:
+### Connect Claude to it
 
-```bash
-claude mcp add ankka -- ankka mcp
-```
+`ankka mcp install` configures a client to start the server, whichever way you work:
 
-Any other MCP client starts it the same way. A client that takes a JSON configuration names the command
-and its argument:
+| You use | Run | What it changes |
+|---|---|---|
+| Claude Code, in a project made by `ankka init` | nothing | the project's `.mcp.json` already names the server |
+| Claude Code, in every project | `ankka mcp install` | Claude Code's own configuration, for you, through `claude mcp add --scope user` |
+| Claude Code, in one existing project, for everyone who works on it | `ankka mcp install --scope project` | a `.mcp.json` in the project, to commit |
+| Claude Desktop | `ankka mcp install --client desktop` | Claude Desktop's `claude_desktop_config.json`; quit and reopen Desktop afterwards |
+
+**Claude Code asks before starting a project's server.** A `.mcp.json` is part of the repository, so
+Claude Code asks each person once whether to trust it. `ankka init` leaves that question in place rather
+than answering it for you: a repository that could start programs without asking could start any.
+
+**The project file names `ankka`; the others name a path.** A `.mcp.json` is read on other machines, so
+it names the command and relies on `PATH`. Claude Desktop is started from the Dock rather than a shell
+and does not see your shell's `PATH`, so `ankka mcp install` writes the absolute path of the first
+`ankka` on yours, and for the JVM build a `JAVA_HOME`, so the launcher finds Java without one either.
+`--command` names a different `ankka`.
+
+**Nothing is overwritten.** Every write keeps the other servers and settings in the file, and an
+existing server named `ankka` is left as it is and shown to you; `--force` replaces it. `--dry-run`
+prints what would change and changes nothing. When the `claude` command is not on `PATH`,
+`ankka mcp install` changes nothing and prints the command to run, or the plugin to install instead.
+
+Any other MCP client starts the server the same way. A client that takes a JSON configuration names the
+command and its argument:
 
 ```json
 {
@@ -112,11 +137,15 @@ request to the service's own port, so the endpoint's ACL applies to it exactly a
 
 With the skill and the server, an agent can take a change from code to a running, observed service:
 
-1. Read the page for the component it is writing, with `read_doc` or from the skill.
-2. Write the code and its unit test, and run `sbt test` or `uv run pytest`.
-3. Run the service locally, then use `list_local_services`, `call_local_endpoint` and `local_traces` to
-   exercise it and see which components each request went through.
-4. Build the image and `apply_service` a descriptor, then poll `get_service` until the service is
+1. Decide the components and write them down as a table, one row per requirement, naming the close
+   alternative each choice beat (the `ankka-design` skill).
+2. Read the page for the component it is writing, with `read_doc` or from the skill.
+3. Write the code and its unit test, and run `sbt test` or `uv run pytest`.
+4. Run the service locally, then check it against the specification (the `ankka-inspect` skill):
+   `describe_local_service` to compare what it registered with the table, `call_local_endpoint` for each
+   acceptance scenario, `query_local_entity` for the state each one left, and `local_traces` to see which
+   components each request went through.
+5. Build the image and `apply_service` a descriptor, then poll `get_service` until the service is
    `Ready`, and read `service_logs` if it is not.
 
 ## Documentation for other tools

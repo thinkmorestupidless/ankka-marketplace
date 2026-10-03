@@ -92,7 +92,9 @@ None, "name", input)` and `cancel(id)`. `WorkflowTestKit` and `TimedActionTestKi
 Scala workflows and timers are tested through `AnkkaTestKit`, because transitions, recovery, timeouts and
 firing are the runtime's behaviour; register `TimerRuntime` with a short poll interval to keep timer
 tests fast. Python and TypeScript have `WorkflowTestKit` and `TimedActionTestKit`, which run commands, steps and handlers
-by hand with no sidecar. Assert on the lifecycle and the state, not on timing.
+by hand with no sidecar. Assert on the lifecycle and the state, not on timing. Ask of every test whether
+it could pass while the behaviour is broken (`references/build/testing.md`, "A test must be able to
+fail"); a compensation test, for one, must make the step fail and then see what was released.
 
 ## Mistakes to check for
 
@@ -117,4 +119,4 @@ Open the one a task needs; each is one topic and stands alone.
 - `references/build/timers.md` — Schedule a call for later with a timed action, cancel or replace it by name, and handle retries — timers are stored in the database and outlive the process that set them.
 - `references/build/multi-agent-orchestration.md` — Coordinate several agents from a workflow — sequentially, in parallel, or chosen dynamically by another agent — sharing one session, and test the coordination with a scripted model.
 - `references/build/component-client.md` — Call entities, workflows and agents through the component client — blocking or asynchronous, with typed refusals and timeouts — and query views through the view client.
-- `references/build/testing.md` — Test ankka components at two levels in Scala, Python and TypeScript — unit test kits that run a component with nothing else, and integration test kits that run the whole service against a real database — with scripted models for agents.
+- `references/build/testing.md` — Test ankka components at two levels in Scala, Python, TypeScript and Rust, with unit test kits that run one component and nothing else, integration test kits that run the whole service against a real database, and scripted models.

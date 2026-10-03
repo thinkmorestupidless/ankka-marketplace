@@ -116,9 +116,42 @@ fragments over the row's JSON, built with `jsonText("field") ++ sql" = $value"` 
 | Must define | `onMessage(message: Src): Effect`, `create(ctx: ConsumerContext)` |
 | May override | `onDelete: Effect` (default: ignore), `produceTo: Option[String]`, `outputSerializer: Option[Serializer[Out]]`, `parallelism` (default 4) |
 | In a handler | `messageContext` (`subject`, `sequenceNumber`, `localOrigin`); the context's `componentClient` |
-| Effects | `effects.produce(out)`, `effects.produce(out, metadata)`, `effects.done()`, `effects.ignore()` |
+| Effects | `effects.produce(out)`, `effects.produce(out, metadata)`, `effects.produceAll(messages)`, `effects.done()`, `effects.ignore()` |
+| One of several messages | `effects.message(out)`, then `.withKey(key)` to publish it under a record key other than its subject and `.withMetadata(metadata)` for its headers |
 
-See [Consumers](../build/consumers.md) and [Broker topics](../build/topics.md).
+`produceAll` publishes its messages in order, and the change is handled when the broker has accepted all
+of them; an empty list is handled at once. See [Consumers](../build/consumers.md) and
+[Broker topics](../build/topics.md).
+
+## Graph consumer
+
+A consumer that publishes its source as graph deltas, in `com.thinkmorestupidless.ankka.sdk.graph`. It is
+registered as a consumer and can publish nothing but deltas.
+
+| Part | API |
+|---|---|
+| Base class | `GraphConsumer[Src]` |
+| Companion | `GraphConsumer.Companion[C, Src](componentId, source, topic)` |
+| Must define | `onMessage(message: Src): Effect`, `create(ctx: ConsumerContext)` |
+| May override | `onDelete: Effect` (default: ignore), `parallelism` (default 4) |
+| In a handler | `messageContext` (`subject`, `sequenceNumber`), `graph`, `effects` |
+| Elements | `graph.node(id, labels, properties)`, `graph.edge(id, type, from, to, properties)`, `graph.tombstoneNode(id)`, `graph.tombstoneEdge(id, type, from, to)`; `.at(version)` states a version |
+| Effects | `effects.publish(elements*)`, `effects.done()`, `effects.ignore()` |
+| A refusal | `GraphElementRefused`, an `IllegalArgumentException` whose `why` names the rule broken |
+
+A delta as it is published and read is a `GraphDelta`, in `com.thinkmorestupidless.ankka.core.graph`:
+
+| Part | API |
+|---|---|
+| Fields | `kind` (`Node`, `Edge`, `Tombstone`), `element` (`Node`, `Edge`), `id`, `version`, `labels`, `edgeType`, `from`, `to`, `properties` |
+| Derived | `key`, the record key `node:<id>` or `edge:<id>`; `isTombstone` |
+| Reading | `GraphDelta.read(value)`, and `GraphDelta.read(key, value)`, which also checks the key; both answer `Either[String, GraphDelta]` |
+| Serializer | `GraphDelta.serializer`, under the manifest `GraphDelta.SchemaName`, `ankka.graph-delta.v1` |
+| Keys | `GraphDelta.nodeKey(id)`, `GraphDelta.edgeKey(id)` |
+
+Property values are `String`, `Boolean`, `Int`, `Long`, `Double`, or a `Seq` of one of them. They are
+normalised as the reader of the topic stores them: every integer is a `Long`, and a `Double` with a whole
+value is that `Long`. See [Publish a graph](../build/graph.md).
 
 ## Workflow
 
@@ -173,6 +206,22 @@ Scheduling twice under one name replaces the earlier timer. See [Timers](../buil
 
 See [Agents](../build/agents.md), [Streaming responses](../build/streaming.md) and
 [Multi-agent orchestration](../build/multi-agent-orchestration.md).
+
+## Judgments
+
+| Part | API |
+|---|---|
+| Questions | `Question.choice[T](id, instructions)(value -> (key, description), …)`, `Question.choiceByKey(id, instructions)(key -> description, …)`, `Question.score(id, instructions)(levels*)`, `Question.yesNo(id, instructions)`, `.describing(yes, no)` |
+| Answers | `judgment(question)` → `ChoiceAnswer[T](choice, probabilities, confidence)`, `ScoreAnswer(score, probabilities, confidence)` with `.level`, `YesNoAnswer(probability)`; `judgment.model`, `judgment.usage`, `judgment.contains(question)` |
+| Effect | `effects.judgment.state(text)` or `.state(value)` (needs a `JsonValueCodec`), `.question(q, more*)`, `.provider(p)`, then `.thenReply()` or `.thenReply(judgment => value)` |
+| Runtime | `AgentRuntime.withJudgments(provider, timeout)` (5 seconds by default), on either `AgentRuntime()` or `withDefaultModel(…)` |
+| Providers | `JevProvider.fromEnv(model)` (reads `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`), `JevProvider.withApiKey(key, model, baseUrl)`; `DefaultModel` is `jev-1.13.0`; or implement `JudgmentProvider` |
+| Guardrails | `Guardrail.judged(name).onInput(rules*).onOutput(rules*).provider(p)`; rules `Refuse.ifYes(q, atLeast)`, `Refuse.ifChosen(q, minConfidence)(options*)`, `Refuse.ifScore(q, atLeast)`, `Refuse.when(q)(answer => Boolean)` |
+| Failures | `JudgmentFailed(provider, message, cause, timedOut)`; a judgment effect's is `Unavailable` or `Timeout`, a judged guardrail's could-not-check is `Unavailable` or `Timeout`, its refusal `Forbidden` |
+| Testing | `TestJudgmentProvider().expect(answers*)`, `.always(answers*)`, `.failNext(message, timedOut)`, `.reporting(usage)`, `.requests`, `.lastRequest`, `.callCount`, `.reset()`; `Answers.choice`, `.choiceWith`, `.score`, `.scoreWith`, `.yesNo` |
+| Usage | `forSessionMemory(id)` → `history` has `judgmentUsage` beside the text model's `usage` |
+
+See [Judgments](../build/judgments.md).
 
 ## Autonomous agent
 
@@ -250,6 +299,8 @@ val service = Ankka.service
 |---|---|
 | `EventSourcedTestKit.of(Companion, id)` | One event sourced entity, no runtime. `call(handler)(input)` returns the events, reply or error. |
 | `KeyValueEntityTestKit.of(Companion, id)` | One key value entity, no runtime. |
+| `ConsumerTestKit.of(Companion, client)` | One consumer, no runtime. `onMessage(message, subject, sequenceNumber)` and `onDelete(subject, sequenceNumber)` return the effect and the `messages` it publishes: `payload`, the record `key` a broker is given, `metadata`, `text`. |
+| `ConsumerTestKit.graph(Companion, client)` | One graph consumer, no runtime. The same two calls return the `GraphDelta`s published, read back from their bytes; `records` gives the same consumer as messages. |
 | `TestTransport` | A `ComponentClient` whose calls are stubbed, for testing a component that calls others. |
 | `AnkkaTestKit.start(descriptors…)` | The whole service against a throwaway Postgres. `restartService()` drops every entity from memory. |
 | `TestModelProvider` | A scripted model that fails when its script runs out. |
