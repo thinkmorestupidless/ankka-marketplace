@@ -21,6 +21,12 @@
       "version": "0.4.1"
     },
     {
+      "name": "ankka-reasoning",
+      "source": "./plugins/ankka-reasoning",
+      "description": "The ankka-reasoning documentation as a skill — recording evidence, claims and beliefs as records that are never edited, asking why a belief changed or what was believed at a past time, markets and their resolutions, and reading the graph.",
+      "version": "0.1.1"
+    },
+    {
       "name": "satisfactory",
       "source": "./plugins/satisfactory",
       "description": "The satisfactory documentation as skills — the service and its API, the Scala client, using it from an ankka application, and writing a model.",
