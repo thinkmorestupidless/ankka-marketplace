@@ -20,9 +20,9 @@ and the graph gains a `Cart`, a `Checkout` and a `CHECKED_OUT` edge between them
 shopping-cart (ankka) ──► cart-checkouts ──► mapper ──► graph-deltas ──► graph (Neo4j merge sink) ──► Neo4j
 ```
 
-A single service that writes its own graph needs none of this. Reach for it when the graph is fed by
-topics the services already publish, when it must be rebuildable from those topics, or when several
-services contribute to it.
+A service that publishes its own graph deltas needs none of this: its pipeline is the sink alone, as
+[Fill a graph from an ankka service](graph-from-ankka.md) shows. Reach for a mapper when the graph is
+fed by topics the services already publish for other reasons, or by several services at once.
 
 ## Decide the ids and the versions
 
@@ -42,7 +42,10 @@ Every element of the graph needs a global id and a version that only rises.
 The mapper reads the notice, decides what it means for the graph, and emits one delta per element
 through a `GraphDeltaOutlet`. The outlet builds each record and gives it its
 [element key](../reference/graph-deltas.md#the-record-key), `node:<id>` or `edge:<id>`, so every delta
-for one element is applied in order and the topic can be compacted. The mapper never chooses a key:
+for one element is applied in order and the topic can be compacted. The mapper never chooses a key.
+The sample is Python; a Scala mapper declares the same port with `graphDeltaOutlet("deltas")` and
+builds deltas with its `node`, `edge`, `tombstoneNode` and `tombstoneEdge` methods, as
+[Write a streamlet in Scala](scala-streamlet.md) and the [Scala SDK reference](../reference/scala-sdk.md#graph-deltas) show:
 
 ```python
 import logging
