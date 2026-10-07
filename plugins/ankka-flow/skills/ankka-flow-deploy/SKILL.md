@@ -64,6 +64,13 @@ the streamlet's container and the sidecar.
    `flow version` prints `flow <version>, protocol <major>.<minor>`. Another platform, or a change to
    ankka-flow, builds from source with sbt.
 
+14. **Through `flow mcp`, deploy and observe with tools.** In a project from `flow init`,
+   `apply_pipeline` verifies, generates and applies, `get_pipeline` shows phase, status and events,
+   `pipeline_logs` a streamlet's process or sidecar log, `pipeline_lag` consumer lag per inlet
+   partition, and `reset_pipeline` requests a reset with `flow reset`'s guards — all on the one
+   cluster `flow.toml` names, never kubectl's current context. `apply_pipeline` and `reset_pipeline`
+   change it and are confirmed before they run.
+
 ## Troubleshooting order
 
 `kubectl get aflow <name>` → `kubectl get events --field-selector involvedObject.kind=AnkkaFlow` →
@@ -77,6 +84,7 @@ and both the writer and the topic's old records have to be replaced.
 
 ## Mistakes to check for
 
+- Running `kubectl` against the shell's current context instead of the cluster `flow.toml` names.
 - A guide or script that builds `flow` from source instead of installing it, or a `cli/target/…`
   path where `flow` on the `PATH` belongs.
 - A sidecar image, Kafka address or credential written into the resource or the streamlet's image.
@@ -126,7 +134,7 @@ Open the one a task needs; each is one topic and stands alone.
 
 ### Reference
 
-- `references/reference/cli.md` — Every command, option, message and exit code of the flow CLI, which verifies blueprints, generates the AnkkaFlow resource and requests resets.
+- `references/reference/cli.md` — Every command, option, message and exit code of the flow CLI, which starts streamlet projects, verifies blueprints, generates the AnkkaFlow resource and requests resets.
 - `references/reference/blueprint.md` — Every key of the blueprint file, the HOCON that names a pipeline's streamlets and the topics connecting their ports, and every rule flow verify checks it against.
 - `references/reference/resource.md` — Every field of the AnkkaFlow custom resource and its status, the Kafka cluster Secret, what the operator renders per streamlet, the events it records and the reset annotations.
 - `references/reference/operator.md` — The ankka-flow operator's settings, the namespace and permissions it runs with, and what one reconcile of an AnkkaFlow does, in order.
