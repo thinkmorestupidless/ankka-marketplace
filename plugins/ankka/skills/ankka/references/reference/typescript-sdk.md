@@ -125,12 +125,23 @@ See [Key value entities](../build/key-value-entities.md).
 | Part | API |
 |---|---|
 | Base class | `View<E, Row>` |
-| Statics | `componentId`, `source` (a component class) or `topic`, `events`, `row`, optionally `queries` (`["get", "all"]` by default) |
+| Statics | `componentId`, `source` (a component class) or `topic`, `events`, `row`, optionally `queries` (`["get", "all"]` by default), `declared` (`declaredQuery(name, statement)`) and `version` |
 | Must define | `onChange(event): ViewEffect<Row>` |
 | May override | `onDelete(): ViewEffect<Row>`, which deletes the row by default |
 | In a handler | `this.row` (the current row or `null`), `this.subject`, `this.metadata`, `this.effects` |
 | Effects | `updateRow(row)`, `deleteRow()`, `ignore()` |
-| Querying | `client.views.get(viewId, key, Row)`, `client.views.all(viewId, Row)`, `client.views.query(viewId, name, key, Row)` |
+| Querying | `client.views.get(viewId, key, Row)`, `client.views.all(viewId, Row)`, `client.views.query(viewId, name, key, Row)`, `client.views.ask(viewId, name, values, Row, limit?)` |
+| Table name | `tableOf(componentId)`, for a statement to name |
+
+## Keyed view
+
+| Part | API |
+|---|---|
+| Base class | `KeyedView<Row>` |
+| Statics | `componentId`, `row`, `sources` (`on(Entity, Events, handler, { deleted? })` each), optionally `declared` and `version` |
+| In a handler | `this.subject`, `this.metadata`, `this.rows.get(key)`, `this.rows.ask(name, values)`, `this.effects` |
+| Effects | `updateRow(key, row)`, `deleteRow(key)`, `updateRows(...)`, `deleteRows(keys)`, `ignore()`, `all(...)` to combine |
+| Testing | `KeyedViewTestKit.of(View)` |
 
 See [Views](../build/views.md).
 
@@ -139,7 +150,7 @@ See [Views](../build/views.md).
 | Part | API |
 |---|---|
 | Base class | `Consumer<M, Out>` |
-| Statics | `componentId`, `source` or `topic`, `message`; to publish, `producesTo` and `out` |
+| Statics | `componentId`, `source` or `topic`, `message`; for a topic, `startFrom`, `contract`, `broker`, `parallel`; to publish, `producesTo` (a topic, or a `Publication` with its contract and broker) and `out` |
 | Must define | `onMessage(message): ConsumerEffect<Out>` |
 | May override | `onDelete()`, which ignores by default |
 | In a handler | `this.subject`, `this.sequenceNumber`, `this.metadata`, `this.client`, `this.effects` |
@@ -158,7 +169,7 @@ nothing but deltas.
 | Part | API |
 |---|---|
 | Base class | `GraphConsumer<M>` |
-| Statics | `componentId`, `source` or `topic`, `message`, `producesTo`; no `out` |
+| Statics | `componentId`, `source` or `topic`, `message`, `producesTo`; `contract`, `broker`, `parallel` for a topic; no `out` |
 | Must define | `onMessage(message): GraphEffect`, which may be `async` |
 | May override | `onDelete()`, which ignores by default |
 | In a handler | `this.subject`, `this.sequenceNumber`, `this.metadata`, `this.client`, `this.graph`, `this.effects` |
@@ -203,26 +214,33 @@ name, and its input is encoded with that step's declared shape. See [Workflows](
 | Base class | `TimedAction` |
 | Statics | `componentId`, `actions` |
 | Declarations | `action(name, input?, run)` |
-| In a handler | `this.metadata` (`ankka.timer`, `ankka.attempts`), `this.client`, `this.effects` |
+| In a handler | `this.metadata` (`ankka.timer`, `ankka.attempts`, `ankka.due`), `this.dueTime` (a `Date`), `this.client`, `this.effects` |
 | Effects | `done()`, `fail(msg, code)` |
-| Scheduling | `await client.timers.schedule(timerId, Duration, { component: Cls, handler: Cls.actions.name }, input)`, or by name `{ kind: "timed-action", componentId, name, input: Shape }`; `await client.timers.cancel(timerId)` |
+| Scheduling | `await client.timers.schedule(timerId, Duration, { component: Cls, handler: Cls.actions.name }, input)`, or by name `{ kind: "timed-action", componentId, name, input: Shape }`; `await client.timers.scheduleRecurring(timerId, delay, period, { component: Cls, handler: Cls.actions.name }, input)`, or by name `{ componentId, name, input: Shape }`; `await client.timers.cancel(timerId)` |
 
-Scheduling twice under one id replaces the earlier timer. See [Timers](../build/timers.md).
+Scheduling twice under one id replaces the earlier timer, except that a recurring timer set again for
+the same handler with the same period keeps its next due time. See [Timers](../build/timers.md).
 
 ## Agent
 
 | Part | API |
 |---|---|
 | Base class | `Agent` |
-| Statics | `componentId`, `handlers`, optionally `role`, `maxToolCallSteps`, `tools`, `guardrails` |
-| Declarations | `command(...)` and `stream(name, input?, run)` in `handlers`; `tool(name, description, Input, run)` in `tools`; `guardrail(name, check)` in `guardrails` |
+| Statics | `componentId`, `handlers`, optionally `role`, `maxToolCallSteps`, `tools`, `guardrails`, `mcpServers`, `resultGuardrails` |
+| Declarations | `command(...)` and `stream(name, input?, run)` in `handlers`; `tool(name, description, Input, run, { approval })` in `tools`; `guardrail(name, check)` in `guardrails`; `mcpServer(name, { url, service, project, path, headers, approval })` in `mcpServers`; `resultGuardrail(name, (tool, text) => …)` in `resultGuardrails` |
+| Approval | `{ approval: true }`, or `{ approval: { withinMs } }` for a time limit |
+| Calling | `.ask(input)` → `{ kind: "answered", value }` or `{ kind: "awaiting-approval", requests }`; `.decide(approvalId, { approved, by, note })`, answered as `ask`; `.streamParts(input)`; `.invoke` and `.stream` reject with `ApprovalAwaited` |
 | In a handler | `this.sessionId`, `this.metadata`, `this.client`, `this.effects` |
 | Effects | `systemMessage(t)`, `userMessage(t)`, `model(name)`, then `.withModel(name)`, `.withContext(t)`, `.memory(bool)`, `.tools(...names)`, `.guardrails(...names)`, `.thenReply()`, `.thenReplyJson<R>()`; `error(msg, code)` |
 
 A handler returns a plan; the sidecar runs the model loop, calls tools back in the process with the model's
 arguments decoded by the tool's input shape, and checks guardrails. A tool's input shape is also the JSON
-Schema the model sees. A guardrail's `check(stage, text)` returns `null` to pass or a reason to block.
-See [Agents](../build/agents.md).
+Schema the model sees. A guardrail's `check(stage, text)` returns `null` to pass or a reason to block. The
+sidecar connects to the MCP servers and enforces approval, so the process never runs a server's tool nor a
+tool that awaits a decision. The unit kit takes scripted servers, `AgentTestKit.of(Agent, sessionId, model,
+client, { mcp })`; `ask` answers text and rejects with `ApprovalAwaited` when the turn waits, `outcome`
+answers the outcome, and `decide` goes on. See [Agents](../build/agents.md) and
+[MCP servers](../build/mcp-servers.md).
 
 ## Autonomous agent
 
@@ -230,9 +248,9 @@ See [Agents](../build/agents.md).
 |---|---|
 | Task type | `taskType(name, description, { result: Schema, rules: [taskRule(name, check)] })`; a check returns `accepted()` or `rejected(reason)` |
 | Base class | `AutonomousAgent` |
-| Statics | `componentId`, `description`, `accepts: [taskAcceptance(type, { maxIterations })]`, optionally `instructions`, `tools`, `guardrails`, `model`, `settings` |
+| Statics | `componentId`, `description`, `accepts: [taskAcceptance(type, { maxIterations })]`, optionally `instructions`, `tools`, `guardrails`, `model`, `settings`, `mcpServers`, `resultGuardrails` |
 | In a tool | `this.client`, `this.taskId` |
-| Calling | `client.tasks.create(type, instructions, { id, attachments, dependsOn })`; `client.forTask(id).get(type)`, `.wait(type)`, `.cancel()`; `client.forAutonomousAgent(Agent, instanceId).assign(...)`, `.suspend()`, `.resume()`, `.terminate()`, `.state()`, `.notifications()`; `client.forAutonomousAgent(Agent).runSingleTask(type, instructions)` |
+| Calling | `client.tasks.create(type, instructions, { id, attachments, dependsOn })`; `client.forTask(id).get(type)`, `.wait(type)`, `.cancel()`; `client.forAutonomousAgent(Agent, instanceId).assign(...)`, `.suspend()`, `.resume()`, `.terminate()`, `.state()` (with `awaiting`), `.notifications()`, `.decide(approvalId, { approved, by, note })`; `client.forAutonomousAgent(Agent).runSingleTask(type, instructions)` |
 
 The TypeScript SDK declares autonomous agents and calls them. Its unit testkit does not yet script one:
 test an autonomous agent's behaviour end to end, through a sidecar with `ANKKA_MODEL_SCRIPT`. See
@@ -242,12 +260,14 @@ test an autonomous agent's behaviour end to end, through a sidecar with `ANKKA_M
 
 | Part | API |
 |---|---|
+| Named events | an `sse` handler may yield `sseEvent(name, value)` among its text, sent as an event of that name with the value as JSON (protocol 1.11) |
 | Base class | `Endpoint` |
 | Statics | `prefix`, `acl` (required: `Acl.allowAll`, `Acl.denyAll`, `Acl.authenticated` or `Acl.allowCallers(...)`), `routes` |
-| Declarations | `get(template, reply, run, options?)`, `post`/`put`/`patch`/`del(template, body?, reply, run, options?)`, `sse(template, run, options?)`; `options` may carry `acl` for that route alone and `params` schemas narrowing path parameters |
+| Declarations | `get(template, reply, run, options?)`, `post`/`put`/`patch`/`del(template, body?, reply, run, options?)`, `sse(template, run, options?)`, `socket(template, (self, req, socket) => Promise<void>, options?)`; `options` may carry `acl` for that route alone and `params` schemas narrowing path parameters |
+| A socket | `for await (const text of socket)`, `await socket.receive()` (`undefined` once closed), `await socket.send(text)`, which rejects with `SocketClosed` once closed; testing, `EndpointTestKit.socket(path, frames)` answers what the handler sent and how it ended |
 | Handlers | `(self, req, body) => reply`, sync or `async`; `req.params` is typed from the template; the return value is encoded with the reply shape, `done` or `undefined` answers 204 |
 | Callers | `Callers.internet`, `Callers.service(name, { project })`, `Callers.anyInProject`, `Callers.self` |
-| In a handler | `this.request`: `params`, `query.get`/`getAll`, `headers.get`, `principal`, `metadata`, `caller` (`{ kind: "gateway" }`, `{ kind: "service", project, name }` or `{ kind: "local" }`); `this.client`, scoped to the request |
+| In a handler | `this.request`: `params`, `query.get`/`getAll`, `headers.get`, `principal` (`subject`, `name`, `email`, `emailVerified`, `roles`, `claims`, `issuer`), `metadata`, `caller` (`{ kind: "gateway" }`, `{ kind: "service", project, name }` or `{ kind: "local" }`); `this.client`, scoped to the request |
 | Errors | `throw new HttpProblem(status, message)`; a `CommandError` from a call answers with its code's status |
 
 The process never binds an HTTP port: the sidecar serves the routes and forwards each request. `acl` is
@@ -279,6 +299,33 @@ invocation.stream(input))` for a streaming agent handler. A refusal rejects with
 a child span; `client.withMetadata(md)` scopes a client by hand. See
 [Calling components](../build/component-client.md).
 
+## Secret store
+
+The service's secret store, for a value it must keep and never record, such as a credential a person
+gave it ([Secrets a service keeps](../build/secrets.md)). The consumer, graph consumer, timed action,
+agent, autonomous agent and endpoint classes have `secrets`, and a workflow has it in a step; the two
+entity classes and `View` have no such property, so reaching for one is a type error. `await
+this.secrets.put(name, value)`, `await this.secrets.get(name)` (the value, or `undefined`) and `await
+this.secrets.delete(name)`. A refusal is a `CommandError` with the runtime's code.
+
+The runtime beside the process holds the store and its key; the process never sees the key. For a unit
+test, assign `component.secrets = new InMemorySecrets()`; `noSecrets()` is a store whose every call
+throws. The integration test kit puts a generated `ANKKA_SECRET_KEY` on the runtime it starts. Needs
+protocol 1.4: an earlier runtime is reported as too old for the store.
+
+
+## Other services
+
+The consumer, graph consumer, timed action, agent, autonomous agent and endpoint classes call another
+service as this one through `this.services`, and a workflow in a step; the two entity classes and `View`
+have no such property. `this.services.service("orders")` or `this.services.service("billing",
+"invoices")` answers a client with `get(path, returns)`, `getText(path)`, `post(path, body, { body,
+returns })`, `put(…)`, `delete(path)` and `request(method, path, { body, contentType, headers })`. No
+answer is `ServiceUnresolvable`, `ServiceIdentityMismatch` or `ServiceUnanswered`; an answer outside 2xx to
+a typed helper is `ServiceCallFailed`; all four extend `ServiceError`. For a unit test, assign
+`component.services = new ScriptedServices()`; `noServices()` throws on every call. Needs protocol 1.8:
+an earlier runtime is reported as too old to call another service. See
+[Calling other services](../build/calling-services.md).
 ## Running a service
 
 ```ts

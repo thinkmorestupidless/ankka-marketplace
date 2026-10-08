@@ -25,6 +25,13 @@ A consumer reads one source, declared the same way as a view's:
 From a key value entity a consumer sees the latest value, and intermediate values can be skipped. Use an
 event sourced source for anything that must react to every change.
 
+A consumer over a topic must also say where it starts — the earliest message the broker holds, the
+latest, or a time — and is refused when the service starts if it does not. A version, raised, has it read
+the topic again from there. See [Broker topics](topics.md#where-a-source-starts). A topic source may
+also state the [contract](topics.md#contracts) it expects the topic to carry, name
+[a broker the project declares](topics.md#a-topic-on-another-broker) for it, and ask to read its
+partitions [in parallel](topics.md#reading-partitions-in-parallel).
+
 Every change arrives with the source entity's id and a sequence number: an event's sequence number, or a
 key value entity's revision. A topic's message has no sequence number, and reads as zero.
 
@@ -90,7 +97,7 @@ object CheckoutNotifier
   override val outputSerializer: Option[Serializer[CheckoutNotice]] =
     Some(Codecs.serializer[CheckoutNotice]("checkout-notice"))
 
-  override val produceTo: Option[String] = Some("cart-checkouts")
+  override val produceTo: Option[String] = Some(CheckoutTopic.name)
 ```
 
 In Scala, `produceTo` names the topic and `outputSerializer` encodes the message; a companion with a
@@ -289,7 +296,10 @@ The rules are the same in every language:
 - **An empty list publishes nothing** and the change is handled at once, as with `done`.
 - **The messages of one change may be at most 4 MiB together.** A larger result fails the change, with an
   error naming the consumer, and none of it is published.
-- **A consumer has one topic and one message type.** All of a change's messages go to that topic.
+- **A consumer has one topic and one message type.** All of a change's messages go to that topic. The
+  topic is named alone, or as a publication that also states the [contract](topics.md#contracts) the
+  topic carries and the [declared broker](topics.md#a-topic-on-another-broker) it is on; a message
+  published under a contract carries the contract's name as its `ce-type`.
 
 A [graph consumer](graph.md) is built on this: each element of a graph is one message under the key of its
 element.

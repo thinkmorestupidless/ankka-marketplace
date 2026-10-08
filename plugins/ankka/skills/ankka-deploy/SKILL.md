@@ -96,7 +96,7 @@ Open the one a task needs; each is one topic and stands alone.
 
 - `references/concepts/clustering.md` — How a service's instances form one cluster, how entities are spread across it, how nodes find each other locally and in Kubernetes, and what that means for rollouts, failures and instance counts.
 - `references/concepts/control-plane.md` — How the control plane records what you asked for, how the operator makes the cluster match it, and how the status you read is kept honest with generations and confirmation.
-- `references/concepts/observability.md` — What ankka records about every request — spans, traces, unattributed time, token usage — where you can read it locally and in a cluster, and what it deliberately does not do.
+- `references/concepts/observability.md` — What ankka records about every request — spans, traces, unattributed time, a service's topology of declared connections and observed calls, token usage — where you can read it locally and in a cluster, and what it deliberately does not do.
 
 ### Run and deploy
 
@@ -104,8 +104,10 @@ Open the one a task needs; each is one topic and stands alone.
 - `references/deploy/images.md` — Package a Scala, Python, TypeScript or Rust ankka service as a container image, tag it, and get it onto a cluster by pushing to a registry or loading it into a local kind node.
 - `references/deploy/deploy-a-service.md` — Write a service descriptor, apply it with the ankka CLI, and follow the service from UpdateInProgress to Ready, including environment variables, secrets, version declarations and Python services.
 - `references/deploy/expose.md` — Make a deployed service reachable from outside the cluster at its platform-derived HTTPS hostname, understand why the hostname has the shape it does, and remove the route again.
+- `references/deploy/web-hosting.md` — Deploy any program that serves HTTP as a web-hosted service beside your ankka services — mounts that put backends under the interface's address, calls made as the interface, who is admitted, and what a rollout means for a browser.
 - `references/deploy/scaling-and-rollouts.md` — Choose how many instances a service runs and how large each is, and understand how deploys, restarts and scaling change the running pods without refusing requests.
 - `references/deploy/ci.md` — Deploy a service from a GitHub workflow — create a deploy token, add three secrets, and use the ankka action to install and authenticate the CLI — plus the environment variables, exit codes and output formats any CI system needs.
+- `references/deploy/graph-sink.md` — Register the graph sink in a service to keep a graph store in step with a delta topic, choose the store it writes to, or deploy a ready sink image from ankka-contrib; rebuild the store from the topic by raising the sink's version.
 - `references/deploy/upgrading.md` — Move a service to a new ankka version by changing the library version and the descriptor's runtime declaration together, refreshing the local schema, and checking what a deployed instance actually runs.
 
 ### Observe and operate
@@ -114,13 +116,15 @@ Open the one a task needs; each is one topic and stands alone.
 - `references/operate/console.md` — Use an installation's web console at console.<base domain> to sign in, manage organizations, projects, members and deploy tokens, and deploy, operate and watch services without the CLI.
 - `references/operate/status-and-history.md` — Read a deployed service's status with `ankka services list` and `get`, understand every field including unconfirmed readings, and see who changed a service with `ankka services history`.
 - `references/operate/logs.md` — Read what a deployed service printed with `ankka services logs` — from every instance or one, from the container before the last restart, limited by lines or time — and know what it does not keep.
-- `references/operate/service-lifecycle.md` — What pausing, resuming, restarting and deleting a deployed service do to its instances, its data, its hostname and its generation, and how a suspended service differs from a paused one.
+- `references/operate/telemetry.md` — Send every service's traces and metrics to an OpenTelemetry collector the installation names once, read one request across services as one trace, join logs to traces, and open a local platform's telemetry store.
+- `references/operate/service-lifecycle.md` — What pausing, resuming, restarting, rolling back and deleting a deployed service do to its instances, its data, its hostname and its generation, and how a suspended service differs from a paused one.
 - `references/operate/troubleshooting.md` — Symptoms you are likely to meet building, running, deploying and operating ankka services, with the cause of each and what to do about it.
 
 ### Reference
 
 - `references/reference/cli.md` — Every `ankka` command and option, how the CLI resolves its settings and credentials, its output formats and its exit codes.
 - `references/reference/service-descriptor.md` — Every field of the JSON service descriptor that `ankka services apply` takes, with its type, default and validation rules, and the environment variables the platform reserves.
+- `references/reference/web-hosting.md` — Exactly what the platform's proxy gives a web-hosted service's process and asks of it — the environment, the headers on every request, the calling address, mounts, the proxy's own answers, readiness and stopping.
 - `references/reference/lifecycle-states.md` — What each of a deployed service's eight lifecycle states means, what usually causes it, what to do about it, and what an unconfirmed status is.
 - `references/reference/configuration.md` — Every environment variable and configuration key a running ankka service reads, their defaults, how configuration is layered, and which variables the platform sets for you.
 - `references/reference/runtime-endpoints.md` — The ports and HTTP endpoints every running ankka service exposes besides its own routes — readiness, version and metrics on a deployed instance, and the loopback observability endpoint a local one serves the console.

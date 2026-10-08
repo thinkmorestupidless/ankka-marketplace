@@ -73,8 +73,12 @@ agent (with the same two when it declares tools or guardrails), and `ankka1_http
 missing one it needs is refused at start, naming the export and what needs it.
 
 The host sets two kinds of metadata entry on every request that carries `Metadata`: `ankka.now`, the
-runtime's clock as epoch milliseconds, and the trace entries it sets for a process. A module has no
-clock of its own; `ankka.now` is the one it reads. An entity or workflow command's metadata also
+runtime's clock as epoch milliseconds when it made the call, and the trace entries it sets for a
+process. A module has no clock of its own: it asks for the time through the `now` import. `ankka.now`
+is what a guest library from before protocol 1.10 reads, and the host goes on setting it on every such
+request, so a module built with one still reads the time. A timed action's request also carries
+`ankka.timer`, `ankka.attempts` and `ankka.due`, the due time the run is for, in epoch milliseconds as
+`ankka.now` is. An entity or workflow command's metadata also
 carries `ankka.sequence`, the journal sequence the state it is handed reflects. A consumer's request
 carries `ankka.sequence` for the change it is handed and `ankka.protocol`, the protocol version the host
 speaks. A guest answers `produce_all`, several messages for one change, only when that entry is `1.3` or
@@ -89,13 +93,73 @@ see [the sidecar protocol](sidecar-protocol.md#stateless-conversations) for the 
 | `invoke_stream(ptr, len) -> i64` | `InvokeRequest` | `StreamTokens` (the tokens collected; a streaming reply is delivered whole) | |
 | `query(ptr, len) -> i64` | `QueryRequest` | `QueryReply` | |
 | `schedule(ptr, len) -> i64` | `ScheduleRequest` | `Empty` | |
-| `cancel(ptr, len) -> i64` | `CancelRequest` | `Empty` | |
-| `config(ptr, len) -> i64` | `ConfigRequest` | `ConfigReply` | a descriptor variable; reserved names answer absent |
+| `cancel(ptr, len) -> i64` | `CancelRequest` | `Empty` | cancels a timer of either kind |
+| `schedule_recurring(ptr, len) -> i64` | `ScheduleRecurringRequest` | `ScheduleRecurringReply` | a recurring timer, since protocol 1.12; a refusal is the reply's `Error`, not a trap |
+| `config(ptr, len) -> i64` | `ConfigRequest` | `ConfigReply` | a descriptor variable; reserved names answer absent, the service's secret key (`ANKKA_SECRET_KEY`) among them |
+| `get_secret(ptr, len) -> i64` | `GetSecretRequest` | `GetSecretReply` | the service's secret store, since protocol 1.6; blocks the calling instance |
+| `put_secret(ptr, len) -> i64` | `PutSecretRequest` | `PutSecretReply` | since 1.6 |
+| `delete_secret(ptr, len) -> i64` | `DeleteSecretRequest` | `DeleteSecretReply` | since 1.6 |
+| `request(ptr, len) -> i64` | `ServiceRequest` | `ServiceReply` | a call to another service, made by the runtime as this service, since protocol 1.10. Served only to the exports listed under [Where `request` may be called](#where-request-may-be-called); from any other, the call into the module ends there. Blocks the calling instance until the service answers or the runtime's wait for it ends |
+| `now() -> i64` | | | the runtime's clock as milliseconds since the Unix epoch, when it is asked; from any export, since 1.10 |
+| `random(ptr, len)` | | | fills the `len` bytes at `ptr`, which the guest owns, from the runtime's secure source; `len` is at most 65,536; from any export, since 1.10 |
 | `log(level: i32, ptr, len)` | UTF-8 text | | to the runtime's log under the logger `ankka.module`; `level` is 0 trace, 1 debug, 2 info, 3 warn, 4 error (anything else is error) |
+
+The secret imports and `schedule_recurring` answer every refusal in the reply's `Error`. A module that
+never calls the secret store imports none of them, and one that never sets a recurring timer does not
+import `schedule_recurring`, so it runs on a runtime that predates them; the Rust crate calls them through
+a function of their own for exactly that reason.
 
 An import runs on the thread that called the export, which in the runtime is a virtual thread; a
 blocking import parks it and no other instance is affected. The guest may call an import only from
 inside an export.
+
+## Where `request` may be called
+
+A call to another service waits for as long as that service takes, and a call into a module cannot be
+interrupted. So the runtime serves `request` only to an export it runs on an instance of its own, where
+the wait holds nothing another call needs. It decides from the export it called: it does not read the
+request to decide, and it does not depend on what the guest library checks.
+
+| Export | A `request` made while the runtime is running it |
+|---|---|
+| `ankka1_run_step` | proceeds |
+| `ankka1_consumer` | proceeds |
+| `ankka1_timed_action` | proceeds |
+| `ankka1_plan` | proceeds |
+| `ankka1_invoke_tool` | proceeds |
+| `ankka1_check_guardrail` | proceeds |
+| `ankka1_check_task_result` | proceeds |
+| `ankka1_http` | proceeds |
+| `ankka1_handle` | refused: a command of an entity or of a workflow, which every other command to the same instance would wait behind |
+| `ankka1_fold` | refused: an event applied to an entity's state, which must give the same state every time |
+| `ankka1_view` | refused: a view's handler, for the same reason |
+| `ankka1_close`, `ankka1_discover` | refused |
+
+A refused `request` does not return. The call into the module ends there, as it does for a trap: nothing
+was sent, the instance is discarded and replaced, the state the runtime holds is untouched, and the
+caller is answered with a fault that names the import and what was running, such as `request may not be
+called from the command cart/add-item`. An export the ABI gains is refused until it is listed here.
+
+A `request` is refused in the same way when the call it is made from has been abandoned. The module ran
+past the runtime's deadline for the export, its caller has already been answered with a fault, and what
+the module does after that makes no further call to another service.
+
+`request` answers a `ServiceReply` with exactly one case set: `response` whenever the service answered,
+whatever its status, a refusal included; `failure` when no answer came, with the reason `UNRESOLVABLE`,
+`IDENTITY_MISMATCH` or `UNANSWERED`; and `error` when the runtime refused the request itself, such as a
+name that is not one or a body over 4,000,000 bytes, or `error` with `UNAVAILABLE` before the service
+has started. The runtime sends the metadata it gave the export being run, whatever
+`ServiceRequest.metadata` holds, so the call is counted from that handler and traced under it. The request
+carries no timeout: the runtime waits as long as the service's `ankka.service-client.timeout` says and
+answers `UNANSWERED` when that passes. A redirect is the reply; it is not followed.
+
+`now` is the time when it is asked. Two reads in one call may differ, and when an event is applied again
+it is still the present, so an event's time is read from the event. `random` is never seeded and has no
+setting; bytes used to make an id in a command belong in the event the command records, since applying
+the event again does not run the command again. Neither waits, and both are served to every export.
+
+A module that calls none of the three imports none of them, and runs on a runtime that predates them. A
+module that imports one is refused at start by an earlier runtime, naming the import.
 
 ## Guest shapes
 
@@ -114,15 +178,17 @@ Declared per component in `WasmSpec.stateful`.
 - A **refusal** is a value: `Outcome.error` in a reply, `ToolResult.error`, `GuardrailResult.block`,
   `HttpResponse` with an error status. Nothing is persisted; the caller sees the code.
 - A **fault** is a `failure` field set in a reply, or a trap (unreachable, out of bounds, out of
-  memory, a panic under `panic = "abort"`). The host discards the instance, keeps its held state, and
-  answers the caller with a fault, as a process's `Failure` does.
+  memory, a panic under `panic = "abort"`), or an import the host refused to serve: a `request` from
+  an export that may not make one, a `random` for more than it fills or into memory that is not the
+  module's. The host discards the instance, keeps its held state, and answers the caller with a
+  fault, as a process's `Failure` does.
 - The guest should send a panic's message through `log` before trapping, so the fault names itself.
 
 ## Discovery
 
 `ankka1_discover` receives `SidecarInfo` and answers `WasmSpec`. The runtime validates
 `WasmSpec.spec` with the rules a process's `Spec` is held to and additionally refuses: a handler with `streaming`, a
-streaming endpoint route, a stateful id that is not a declared stateful-kind component, and an
+streaming endpoint route, a socket route, a stateful id that is not a declared stateful-kind component, and an
 `abi_version` other than the exports' prefix. Every problem is reported at once in the runtime's
 log; there is no `ReportError` call into a module.
 
@@ -149,7 +215,7 @@ guest does not use is not needed). A changed signature or memory rule is `ankka2
 The runtime reads the module once at start, compiles it once, and builds instances of it as it needs
 them.
 
-![How the runtime hosts a WebAssembly module: one container runs one JVM, the runtime, with the module read once and compiled once. The entity and workflow hosts hold each loaded entity's encoded state and call ankka1_handle and ankka1_fold on a command pool of reused instances: a stateless command takes any free instance, a stateful entity is pinned to one, and a trapped instance is discarded and replaced while the held state survives for the next call. Workflow steps, views, consumers, timed actions, HTTP routes, an agent's plan, tools and guardrails, and an autonomous agent's result check each run on a fresh instance built for the call and discarded after it. From inside an export the module calls back through the ankka1 imports — invoke, send and query for the component client, invoke_stream, schedule and cancel, config with reserved names answered absent, and log — which reach the rest of the runtime while the calling virtual thread parks. Every call crosses the instance's linear memory as protobuf: the runtime writes the request through ankka1_alloc and calls the export with its pointer and length, and the guest returns the reply's pointer and length packed into one i64.](../assets/diagrams/wasm-hosting.svg)
+![How the runtime hosts a WebAssembly module: one container runs one JVM, the runtime, with the module read once and compiled once. The entity and workflow hosts hold each loaded entity's encoded state and call ankka1_handle and ankka1_fold on a command pool of reused instances: a stateless command takes any free instance, a stateful entity is pinned to one, and a trapped instance is discarded and replaced while the held state survives for the next call. Workflow steps, views, consumers, timed actions, HTTP routes, an agent's plan, tools and guardrails, and an autonomous agent's result check each run on a fresh instance built for the call and discarded after it. From inside an export the module calls back through the ankka1 imports — invoke, send and query for the component client, invoke_stream, schedule, schedule_recurring and cancel, config with reserved names answered absent, and log — which reach the rest of the runtime while the calling virtual thread parks. Every call crosses the instance's linear memory as protobuf: the runtime writes the request through ankka1_alloc and calls the export with its pointer and length, and the guest returns the reply's pointer and length packed into one i64.](../assets/diagrams/wasm-hosting.svg)
 
 Two pools serve calls:
 

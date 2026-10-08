@@ -116,6 +116,17 @@ assert(result.changed)
 assertEquals(kit.currentState, Profile("Ada", "ada@example.com", 1))
 ```
 
+`KeyedViewTestKit(companion)` hands a keyed view's source handler one change and writes the rows it
+names to a map the test reads, through the view's own serializer. A declared query is SQL, so the test says
+what each answers with `answering(query)`, and a handler that asks one the test has not answered fails the
+test, naming it:
+
+```scala
+val kit = KeyedViewTestKit(Shipments)
+kit.answering(Shipments.ofCustomer)(values => kit.rows.values.filter(_.customer.contains(values("customer"))).toVector)
+kit.change(Shipments.customers, "c1", CustomerRenamed("Ada"))
+```
+
 `ConsumerTestKit.of(companion)` hands a consumer one change and returns what it would publish, and
 `ConsumerTestKit.graph(companion)` does the same for a [graph consumer](graph.md), returning its deltas;
 see [Testing a consumer](#testing-a-consumer).
@@ -133,9 +144,10 @@ behaviour.
 | `KeyValueTestKit.of(Entity, id)` | commands on a key value entity |
 | `WorkflowTestKit.of(Workflow, id)` | `call` a command, `run_step` a step, `run_until_end` to follow transitions |
 | `ViewTestKit.of(View)` | `on_change(key, event)`, `on_delete(key)`, then `get(key)` for the row |
+| `KeyedViewTestKit.of(KeyedView)` | `change(Entity, key, event)`, `deleted(Entity, key)`, `answering(name, fn)`, then `get(key)` or `rows` |
 | `ConsumerTestKit.of(Consumer)` | `on_message(message, subject, sequence=…)`, `on_delete(subject)`; `messages` holds what it published, each with the key it named |
 | `GraphConsumerTestKit.of(GraphConsumer, client)` | `on_message(message, subject, sequence=…)`, `on_delete(subject, sequence=…)`, each returning the elements published |
-| `TimedActionTestKit.of(Action)` | `call(name, input)` |
+| `TimedActionTestKit.of(Action)` | `call(name, input, metadata={...})`, the metadata being what the handler reads, such as `ankka.due` |
 | `AgentTestKit.of(Agent, session, model)` | a handler plus the loop the sidecar would run, against a `ScriptedModel` |
 | `EndpointTestKit.of(Endpoint, *args)` | `get`, `post`, `put`, `delete` against the routes, returning a `Response` |
 
@@ -184,9 +196,10 @@ def test_assistant_plans_and_the_tool_reads_the_cart() -> None:
 | `KeyValueTestKit.of(Entity, id)` | the same, with `changed` in place of `events` |
 | `WorkflowTestKit.of(Workflow, id)` | `call` a command, `runStep` a step, `runUntilEnd` and `resume` to follow transitions |
 | `ViewTestKit.of(View)` | `onChange(key, event)`, `onDelete(key)`, then `get(key)` for the row |
+| `KeyedViewTestKit.of(KeyedView)` | `change(Entity, key, event)`, `deleted(Entity, key)`, `answering(name, fn)`, then `get(key)` or `rows` |
 | `ConsumerTestKit.of(Consumer)` | `onMessage(message, subject, metadata)`, `onDelete(subject)`; `produced` holds what it published, each with the key it named |
 | `GraphConsumerTestKit.of(GraphConsumer, client)` | `onMessage(message, { subject, sequence })`, `onDelete({ subject, sequence })`, each returning the deltas published |
-| `TimedActionTestKit.of(Action)` | `invoke(action, input)` |
+| `TimedActionTestKit.of(Action)` | `invoke(action, input, metadata)`, the metadata being what the handler reads, such as `ankka.due` |
 | `AgentTestKit.of(Agent, session, model)` | a handler plus the loop the sidecar would run, against a `ScriptedModel` |
 | `EndpointTestKit.of(Endpoint)` | `get`, `post`, `put`, `delete` against the routes, returning a `Response` |
 
@@ -204,6 +217,7 @@ dispatch the module's exports use:
 | `KeyValueEntityTestKit::<C>::new(id)` | commands on a key value entity |
 | `WorkflowTestKit::<C>::new(id)` | `command`, `run_step`, `run_to_end`, `resume`, `state` |
 | `ViewTestKit::<C>::new()` | `on_event(key, event)`, `on_deleted(key)`, then `row(key)` |
+| `KeyedViewTestKit::<C>::new()` | `change::<E>(source, key, event)`, `deleted(source, key)`, `answering(name, fn)`, then `row(key)` |
 | `ConsumerTestKit::<C>::new()` | `on_message(subject, message)`, `on_deleted(subject)`; `.at(sequence)` sets the sequence number, and `ConsumerTestKit::<C>::messages(&effect)` reads what an effect publishes, each message with its record key |
 | `GraphConsumerTestKit::<G>::new()` | `on_message(subject, sequence, message)`, `on_deleted(subject, sequence)`, each returning the elements published |
 | `EndpointTestKit::<E>::new()` | an endpoint's routes by method and path |
@@ -329,6 +343,15 @@ A consumer that calls other components is given a client that answers: a `TestTr
 Scala, a client double in Python and TypeScript, and a kit built `.with_service(build())` in Rust. With
 none, the call is refused, the handler fails, and in a running service the change would be delivered
 again.
+
+## Testing a component that calls another service
+
+A component that calls another service is given a scripted set of services in a unit test,
+`ScriptedServices` in every language, which answers as the test says, records each request, and fails the
+test for a service nothing is scripted for. A test of a whole Scala service plays the other service on
+loopback with `ScriptedService.start()` and gives its address to
+`AnkkaTestKit.start(…, localServices = Map(name -> scripted.address))`. See
+[Calling other services](calling-services.md).
 
 ## Integration testing
 
@@ -487,11 +510,18 @@ val testKit = AnkkaTestKit.start(Seq(ShoppingCartEntity.descriptor), Seq(server)
 val baseUrl = s"http://127.0.0.1:${server.boundPort.get}"
 ```
 
+### gRPC in an integration test
+
+A gRPC server is served the same way, on a free loopback port, and called through the stub generated from
+the `.proto` file over `GrpcChannels.plaintext`. `GrpcChannels.plaintext(port, caller)` makes every call as
+a named caller, for an ACL that names callers. See [gRPC endpoints](grpc-endpoints.md#test-it).
+
 ### Timers and projections in an integration test
 
 Register the extension the component needs, as the service itself would: `TimerRuntime` for timed
 actions, `ProjectionRuntime()` for views and consumers. A shorter timer poll interval keeps a timer test
-fast, as in [Timers](timers.md#testing-timers). Views and consumers see changes after the write returns,
+fast, as in [Timers](timers.md#testing-timers), and a `TimerProbe` given to the `TimerRuntime` records the due
+time each run was for, which is what a test of a recurring timer asserts. Views and consumers see changes after the write returns,
 so assert on them by retrying until the expected value appears, and retry on the value that changes
 rather than on the mere presence of a row.
 
@@ -614,7 +644,9 @@ Then("the cart holds {int} of {string}") { (quantity: Int, product: String) =>
 ```
 
 The suite takes the directory of its features, relative to the working directory; a forked sbt test runs
-in its project's directory, so `GherkinSuite("features")` reads the project's own `features/`. It mixes
+in its project's directory, so `GherkinSuite("features")` reads the project's own `features/`. It also
+takes the path of one `.feature` file, `GherkinSuite("features/cart/items.feature")`, and then runs that
+file's scenarios and no others, which is how several suites share one directory of features. It mixes
 in like any suite, `LogCapturing` included, and starts its service in `beforeAll` as the integration test
 kit does.
 

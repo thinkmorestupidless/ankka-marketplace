@@ -108,15 +108,28 @@ The table is generated from the control plane's own route declarations.
 | `DELETE` | `/projects/{projectId}` | |
 | `PUT` | `/projects/{projectId}/registry` | |
 | `DELETE` | `/projects/{projectId}/registry` | |
+| `PUT` | `/projects/{projectId}/secrets/{name}` | |
+| `DELETE` | `/projects/{projectId}/secrets/{name}` | |
+| `PUT` | `/projects/{projectId}/topics/{name}` | |
+| `GET` | `/projects/{projectId}/topics/{name}/schema` | |
+| `DELETE` | `/projects/{projectId}/topics/{name}` | |
+| `GET` | `/projects/{projectId}/topics` | |
+| `PUT` | `/projects/{projectId}/brokers/{name}` | |
+| `DELETE` | `/projects/{projectId}/brokers/{name}` | |
+| `GET` | `/projects/{projectId}/brokers` | |
+| `GET` | `/projects/{projectId}/secrets` | |
 | `GET` | `/services/{projectId}` | |
 | `GET` | `/services/{projectId}/{name}` | |
 | `PUT` | `/services/{projectId}/{name}` | |
+| `POST` | `/services/{projectId}/{name}/rollback` | |
+| `GET` | `/services/{projectId}/{name}/descriptor` | |
 | `POST` | `/services/{projectId}/{name}/pause` | |
 | `POST` | `/services/{projectId}/{name}/resume` | |
 | `POST` | `/services/{projectId}/{name}/restart` | |
 | `POST` | `/services/{projectId}/{name}/expose` | |
 | `POST` | `/services/{projectId}/{name}/unexpose` | |
 | `GET` | `/services/{projectId}/{name}/logs` | |
+| `GET` | `/services/{projectId}/{name}/topology` | |
 | `GET` | `/services/{projectId}/{name}/history` | |
 | `DELETE` | `/services/{projectId}/{name}` | |
 | `GET` | `/auth/whoami` | |
@@ -378,6 +391,100 @@ Stops claiming the project's registry credential. Answers `204`, or `404` if non
 The Secret itself is left in the cluster — the control plane holds no permission to delete one — and
 the next deploy of each service in the project stops naming it.
 
+### `PUT /projects/{projectId}/secrets/{name}`
+
+Sets entries of a project secret, which a descriptor's variable takes by `secretKeyRef`. Body:
+`{ "entries": { "STRIPE_KEY": "…" } }`. Members of the project's organization, including deploy tokens.
+Answers `204`.
+
+The entries named are added or replaced and every other entry of the secret is kept. They are written to
+a Kubernetes Secret in the project's namespace before anything is recorded, and a cluster that could not
+be written answers `503` and records nothing. No value appears in any reply, listing or history: the
+control plane records the secret's name and its entries' names. A name the platform uses for its own
+Secrets (beginning `ankka-`, or ending `-db`, `-cluster-tls`, `-service-tls`, `-database-tls`,
+`-secret-key` or `-telemetry`), a malformed name or entry, an empty value or one over 64 KiB is refused with `400`, every
+problem at once.
+
+### `DELETE /projects/{projectId}/secrets/{name}`
+
+Removes the one entry named by the `entry` query parameter:
+`DELETE /projects/shop/secrets/checkout?entry=STRIPE_KEY`. Answers `204`, or `404` when the project
+secret has no such entry, in which case nothing is written. The Secret itself is never deleted; one with
+no entry left is no longer listed.
+
+### `GET /projects/{projectId}/secrets`
+
+The project's secrets, by name: `[{ "name": "checkout", "entries": ["STRIPE_KEY"], "setAt": "…",
+"setBy": "…" }]`. From the control plane's own record, so a secret just set is listed at once. Never a
+value — the control plane cannot read a Secret back.
+
+### `PUT /projects/{projectId}/topics/{name}`
+
+Declares a topic on the project, which the platform makes on the installation's broker as
+`<projectId>.<name>`, or changes a declared topic: more partitions, its compaction, its contract. Body:
+`{ "partitions": 12, "compacted": false, "contract": { "name": "order.v1", "schema": { … } } }`, where
+`compacted` and `contract` are optional and absent means not compacted and no contract. Members of the
+project's organization, including deploy tokens. Answers `204`.
+
+A project holds one declaration per topic, and every service of the project uses the topic by its name.
+Declaring a topic again as it is records nothing. A name that is not lower-case letters, digits, `-` and
+`.` starting and ending with a letter or digit, or is over 100 characters, partitions outside 1 to 1000,
+a contract name outside `[a-z0-9][a-z0-9._-]{0,98}[a-z0-9]`, and a schema that is not JSON or is over
+64 KiB, are refused with `400`, every problem at once. Fewer partitions than the project declares is
+refused with `409`, naming both counts: a topic is never made smaller.
+
+A contract's schema is written to the project's schema store in the cluster before the declaration is
+recorded, under its fingerprint — `sha256:` and the SHA-256 of the document under RFC 8785 — so the
+record never names a document the cluster does not hold; a cluster that could not be written answers
+`503` and records nothing.
+
+### `GET /projects/{projectId}/topics/{name}/schema`
+
+The schema document a topic's contract was declared with, as JSON, exactly as it was given. Members
+only. `404` when the project declares no contract on the topic.
+
+### `DELETE /projects/{projectId}/topics/{name}`
+
+Stops declaring a topic. Answers `204`, or `404` when the project declares no topic of that name. The
+topic and what was published to it stay on the broker; declaring it again finds them.
+
+### `GET /projects/{projectId}/topics`
+
+The project's declared topics, by name: `[{ "name": "orders", "partitions": 3, "compacted": false,
+"contract": { "name": "order.v1", "fingerprint": "sha256:…" }, "phase": "provisioned", "checks": [ { "topic":
+"orders", "service": "wallet", "component": "consumer:relay", "direction": "publishes", "stated":
+"order.v1", "state": "checked" } ] }]`. From the project's own record, so a topic just declared is listed
+at once. `phase` says how far the platform has got with it — `waiting for broker`, `provisioned`,
+`recovered` or `failed`, with a `detail` — and is absent until the operator has reported on the topic,
+or when the cluster cannot be read. `checks` lists each side a running service takes on a topic with a
+contract, read from the services' instances: `checked` when the component states the declared contract,
+`mismatch` when it states another or none, `unchecked` for an instance started before the declaration;
+empty for a topic without a contract or when no instance could be read.
+
+### `PUT /projects/{projectId}/brokers/{name}`
+
+Declares a broker beside the installation's, which a component of any service in the project may name
+for one topic, or changes where it is. Body: `{ "bootstrap": "kafka.legacy:9094", "shape": "sasl",
+"secret": "legacy-credential" }`. Members of the project's organization, including deploy tokens.
+Answers `204`.
+
+`shape` is `certificate` (the project secret holds `ca.crt`, `tls.crt` and `tls.key`) or `sasl` (it
+holds `ca.crt`, `username` and `password`, and optionally `mechanism`); every shape is over TLS. A name
+outside a topic's rule, a `bootstrap` that is not `host:port[,host:port]`, another shape, or a secret
+name the platform reserves is refused with `400`; a secret the project has not set, or one lacking an
+entry the shape needs, is refused with `400` naming the entry. Declaring a broker again as it is records
+nothing.
+
+### `DELETE /projects/{projectId}/brokers/{name}`
+
+Stops declaring a broker. Answers `204`, or `404` when the project declares no broker of that name. A
+service whose component names the broker is refused at its next start.
+
+### `GET /projects/{projectId}/brokers`
+
+The project's declared brokers, by name: `[{ "name": "legacy", "bootstrap": "kafka.legacy:9094",
+"shape": "sasl", "secret": "legacy-credential", "declaredAt": "…" }]`. Never a credential.
+
 ## Services
 
 Every service route answers with a service status, except where noted:
@@ -400,6 +507,8 @@ Every service route answers with a service status, except where noted:
 | `paused` | boolean | Whether its members paused it. |
 | `hosting` | string | `embedded` or `process`. |
 | `protocol` | string, optional | The sidecar protocol a process-hosted service declared. |
+| `topicSources` | list, optional | Each topic source of the service, from its running instances: `kind`, `component`, `topic`, `group`, `start`, `version`, `recordedVersion`, `behind`, `broker`, `contract`, `lag` (messages past the last one handled, summed over the instances, as of their last poll) and `failing` (the reason of the change being delivered again). Absent when no instance answered, and on a listing row. |
+| `topicChecks` | list, optional | Each side the service's components take on a declared topic with a contract: `topic`, `component`, `direction`, `stated`, `state` (`checked`, `mismatch` or `unchecked`). Absent as `topicSources` is. |
 
 ### `GET /services/{projectId}`
 
@@ -431,6 +540,37 @@ Starts a paused service again. Answers with the status.
 Replaces every instance by a rolling update, and increments the generation. Refused with `409` while the
 service is paused. Answers with the status.
 
+### `POST /services/{projectId}/{name}/rollback`
+
+Rolls the service back: applies the descriptor it recorded at an earlier generation again, as a new
+generation. Nothing is rewound; the generation keeps counting and the history shows the rollback. The
+body names the generation, `{ "generation": 1 }`; `{}` asks for the most recent generation whose
+descriptor differs from the one the service has, passing over restarts and applies of the same
+descriptor. Answers `{ "rolledBackTo": 1, "status": { … } }`, the generation it rolled back to and the
+status it produced.
+
+A rollback is checked as an apply is: the descriptor against the platform's rules as they are now
+(`400 invalid descriptor at generation 1: …`), the organization's quota, and whether the organization
+is disabled. Whether the service is paused or exposed, and its restart count, are unchanged. The service
+keeps the descriptors of its last fifty applies, and refuses with:
+
+- `404 service 'cart' has no generation 9` for a generation it never had;
+- `409 the descriptor of generation 3 is no longer kept; the oldest kept is generation 11`;
+- `409 generation 3 was a restart and ran the descriptor of generation 2`;
+- `409 service 'cart' already has the descriptor of generation 2`, the generation it is at included;
+- `409 service 'cart' has no earlier generation with a different descriptor`, with no generation named.
+
+A refused rollback writes nothing.
+
+### `GET /services/{projectId}/{name}/descriptor`
+
+The descriptor the service applied at the generation named by the required `generation` query
+parameter, exactly as `PUT /services/{projectId}/{name}` accepts one, so it can be compared with the
+current one or applied again. Members only. Answers for a deleted service, as its history does. It
+refuses as a rollback does for a generation never had, no longer kept, or that recorded none. A
+variable's literal value is in the reply as it was applied; one taken from a project secret is the
+reference to it, never the value.
+
 ### `POST /services/{projectId}/{name}/expose`
 
 Makes the service reachable from outside the cluster at `https://<service>-<project>.<base domain>`, and
@@ -452,6 +592,7 @@ Members only. Query parameters:
 |---|---|
 | `instance` | One instance, by pod name; otherwise every instance. |
 | `previous` | Present, or `true`: the container before the last restart. |
+| `platform` | Present, or `true`: the platform's container instead of the developer's. A process-hosted service's pod holds the sidecar beside the process, and a web-hosted one's the proxy beside it; without this the developer's is read. Refused with `400` for a service whose pod has one container: `--platform applies to a service with process or web hosting`. |
 | `tail` | Only the last N lines. |
 | `since` | Only the last N seconds. |
 
@@ -459,13 +600,46 @@ Response: `{ "instances": [ { "instance": "cart-6d9…", "output": "…", "error
 that could not be read carries an `error` rather than failing the whole response. A service with no
 running instance, for example a paused one, answers `404`.
 
+### `GET /services/{projectId}/{name}/topology`
+
+What a deployed service is made of and what calls what, read from each running instance and merged.
+Members only; a non-member is answered `404`, as for the service itself. The control plane reads
+every instance concurrently over the service's observe port, presenting its own certificate, and the
+member receives the merged document and no credential for the service, its instances or the cluster.
+
+Response: `ServiceTopology` — `service`, `running` (instances found), `contributing` (instances that
+answered), `partial`, `instances`, `window`, `nodes`, `declared`, `calls` and `differences`. Each entry
+of `instances` carries `pod` and a `status`:
+
+| `status` | Meaning |
+|---|---|
+| `ok` | The instance answered, and its counts are in the merge. |
+| `unreachable` | It did not answer in time. |
+| `unsupported` | The connection was refused: its runtime serves no topology. |
+| `failed` | It answered with an error, or with something that is not a topology; `problem` says what. |
+
+`partial` is `true` whenever an instance is not `ok`; such an instance contributes nothing and is never
+guessed at. Nodes and declared connections are the union across the instances that answered, and a
+node not on every one of them is listed under `differences` with the pods that have it. Observed calls
+are summed per pair of handlers over a recent window, with `handled` (`ok`, `refused`, `failed`) and
+`unanswered` (`timedOut`, `undelivered`) kept apart: one is counted where a handler ran, the other where
+a caller got no answer, and they are never added together. Durations are read from bucketed histograms,
+so `p50`, `p99` and `max` are bucket edges and say `bucketed: true`. A service with no running instance,
+for example a paused one, answers `404`.
+
 ### `GET /services/{projectId}/{name}/history`
 
 Who did what to the service, newest first. Members only. Each entry is
 `{ "kind": "applied", "generation": 3, "actor": { "subject": "…", "display": "Ada", "administrative": false }, "at": "2026-09-20T12:00:00Z" }`.
-`kind` is one of `applied`, `restarted`, `paused`, `resumed`, `exposed`, `unexposed`, `deleted`,
-`suspended` or `reinstated`. `administrative` is `true` when the platform administrator role is what
-allowed the action. Entries recorded before actors were tracked have no `actor` or `at`.
+`kind` is one of `applied`, `rolled-back`, `restarted`, `paused`, `resumed`, `exposed`, `unexposed`,
+`deleted`, `suspended` or `reinstated`. `administrative` is `true` when the platform administrator role
+is what allowed the action. Entries recorded before actors were tracked have no `actor` or `at`.
+
+An `applied` or `rolled-back` entry also carries `image`, the image of the descriptor it recorded, and
+`digest`, 64 hexadecimal characters that two entries share exactly when their descriptors state the same
+things: reordered labels or annotations are the same descriptor, and reordered variables are not. A
+`rolled-back` entry carries `rolledBackTo`, the generation whose descriptor it applied again. An entry
+the control plane held from before it recorded images may have neither `image` nor `digest`.
 
 ### `DELETE /services/{projectId}/{name}`
 

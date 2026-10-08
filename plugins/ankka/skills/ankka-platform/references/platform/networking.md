@@ -58,8 +58,25 @@ The route's status is reported back. A route the gateway has not accepted, or ha
 resolve to a backend, shows on `ankka services get` as `route pending` or `route rejected: <reason>` in
 the `detail` line. See [Expose a service](../deploy/expose.md).
 
-The gateway routes HTTP/1.1. It forwards no gRPC or HTTP/2 to services, and applies no authentication,
-rate limit or header policy of its own: who may call an endpoint is decided by the endpoint's ACL.
+For a service whose descriptor declares gRPC, the route has a second rule, ahead of the first: a call whose
+`content-type` is `application/grpc`, alone or with a codec such as `+proto`, goes to the service's `grpc`
+port, and everything else to its HTTP port as before. One hostname therefore answers HTTP requests and gRPC
+calls alike. The gateway speaks HTTP/2 to the gRPC port, over TLS with the same backend TLS policy, and
+puts no limit of its own on how long a gRPC call lasts or stays idle, so a stream runs for as long as its
+caller and the service keep it open. gRPC-Web is not routed.
+
+The gateway applies no authentication, rate limit or header policy of its own: who may call an endpoint is
+decided by the endpoint's ACL.
+
+### A bucket reachable from the internet
+
+A bucket whose descriptor asks that it be reachable gets a route of its own, `<service>-storage`, in its
+project's namespace and owned by the service, so deleting the service removes it. It matches the bucket's
+path at the store's one hostname, `storage.<base domain>`, which the wildcard certificate covers, and names
+the store's Service in `garage-system` through a `ReferenceGrant` the operator writes there, one per project.
+The route has no request timeout, so a large upload or download is not cut off. Every other path at that
+hostname answers `404` from the gateway and never reaches the store. See
+[Object storage](object-storage.md).
 
 ## In-cluster addresses
 
@@ -73,11 +90,30 @@ https://orders.ankka-checkout.svc.cluster.local:9000
 
 The address is HTTPS and requires a client certificate the installation issued, so the practical way to
 call another service is the service client, which presents the calling service's certificate and finds
-the port by name. See [HTTP endpoints](../build/http-endpoints.md#call-another-service).
+the port by name. See [Calling other services](../build/calling-services.md).
 
 The port is the descriptor's `port`, 9000 by default. From that one value the platform renders the
 container port, `ANKKA_HTTP_PORT` for the runtime, and the Service's target, so the three cannot
 disagree. A descriptor with `"http": false` gets none of them.
+
+### gRPC addresses
+
+A service whose descriptor declares gRPC has a second port on the same Service, named `grpc`, the
+descriptor's `grpcPort` (9090 by default), and Kubernetes publishes its SRV record, `_grpc._tcp`. It also
+has a headless Service, `<service>-grpc-peers`, with no cluster IP, whose name resolves to one address per
+ready instance. A cluster IP balances connections, and a gRPC caller keeps one connection for minutes, so
+the platform's gRPC client resolves the headless name and balances its calls across instances one by one.
+The server asks each connection to reconnect every two minutes, which brings an instance added to the
+service into every caller's rotation within about that.
+
+A connection whose caller went away without closing it is found within forty seconds: the service asks an
+idle connection whether its caller is still there every thirty seconds, and waits ten for the answer. For a
+caller outside the cluster the gateway holds the connection, and when it gives up on a silent client is the
+gateway's own rule.
+
+The practical way to call another service's gRPC endpoint is `GrpcClients`, which presents the calling
+service's certificate and accepts only the service it asked for. See
+[gRPC endpoints](../build/grpc-endpoints.md#call-another-services-grpc-endpoint).
 
 ## Every connection is mutual TLS
 
@@ -124,7 +160,7 @@ writes. It never reads a private key itself.
 | Certificate | Identity | Mounted at | Issued when |
 |---|---|---|---|
 | `<service>-cluster` | `ankka://<project>/<service>` | `/var/run/secrets/ankka/cluster` | always |
-| `<service>-service` | `ankka://<project>/<service>`, and the Service's DNS names | `/var/run/secrets/ankka/service` | always: it is also who the service is when it calls another |
+| `<service>-service` | `ankka://<project>/<service>`, and the Service's DNS names; on an installation with a broker, also the common name `<project>.<service>` | `/var/run/secrets/ankka/service` | always: it is also who the service is when it calls another, and when it connects to the installation's broker |
 | `<service>-database` | common name `<service>`, the database role | `/var/run/secrets/ankka/database` | the platform provisions its database |
 
 The identity is built from the project's id, so the project id `platform`, which the control plane's
@@ -145,6 +181,11 @@ Every request that reaches an endpoint carries its caller, read from the client 
 - **a service**, named by project and service, for a request from another workload;
 - **the local machine**, when the service runs outside a cluster, where there is no certificate to read.
 
+A request under a web-hosted service's mount arrives under that service's mount certificate,
+`ankka://<project>/<service>/mount`, and is read as **the gateway**: the internet, whose request the
+web-hosted service's proxy passed on. The mount identity is honoured only inside its project. A service of
+another project refuses it, and so does a runtime that predates web hosting.
+
 An endpoint names which callers it admits with `Acl.allowCallers`. See
 [HTTP endpoints](../build/http-endpoints.md#name-who-may-call). Because the caller comes from a
 certificate the platform issued, a request cannot choose who it is: a header claiming to be a service is
@@ -161,32 +202,54 @@ Each workload also gets network policies, which refuse a connection before any T
 | Port | Admitted from |
 |---|---|
 | The service's HTTP port | the installation gateway's proxy pods, and any pod of an ankka workload in any ankka namespace |
+| The service's gRPC port | the same two |
 | 17355 (remoting) and 7626 (management) | the service's own pods only |
-| 7627 (readiness) | anywhere |
+| 7627 (readiness) | anywhere; a web-hosted service's pod has a policy of its own for it, since it has no cluster ports |
+| 7628 (observe) | the control plane's pods, in the control plane's namespace, and nothing else |
 | 5432 on a project's database | that project's ankka workloads, the database's own instances and the database operator |
+| 9093 on the installation's broker | any pod of an ankka workload in any ankka namespace |
+| 3900 on the object store | any pod of an ankka workload in any ankka namespace, and the installation gateway's proxy pods |
+| 3903, the object store's administration | the operator's pods, and nothing else |
 
 Envoy Gateway runs a gateway's proxy pods in its own namespace, `envoy-gateway-system`, not in the
 `Gateway`'s. The policy therefore names those pods by the labels Envoy Gateway gives them, for the gateway
 `ankka` in `ankka-gateway`. A proxy for any other gateway in the cluster is not admitted.
 
-A project is not a network boundary for HTTP: a service in one project can open a connection to a service
-in another. Whether the request is served is the callee's ACL's decision, from the caller's certificate.
+A project is not a network boundary for HTTP or gRPC: a service in one project can open a connection to
+a service in another. Whether the request is served is the callee's ACL's decision, from the caller's certificate.
 That is deliberate — the network decides only that the caller is an ankka workload at all — and a
-project's cluster ports and database are closed to every other project either way.
+project's cluster ports and database are closed to every other project either way. The broker is the
+same: any ankka workload may connect, and the broker itself refuses a service every topic but its own
+project's, by the common name on its certificate. See [The installation's broker](broker.md).
 
 ## The ports an instance uses
 
 | Port | Name | Transport | Used for |
 |---|---|---|---|
 | 9000, or the descriptor's `port` | `http` | mutual TLS | the service's HTTP endpoints |
+| 9090, or the descriptor's `grpcPort` | `grpc` | mutual TLS, HTTP/2 | the service's gRPC endpoints, when the descriptor declares gRPC |
 | 17355 | `remoting` | mutual TLS | cluster remoting between the service's own instances |
 | 7626 | `management` | mutual TLS | cluster bootstrap, `/ankka/version` and `/ankka/metrics` |
 | 7627 | `probe` | plain HTTP | `GET /ready`, and nothing else |
+| 7628 | `observe` | mutual TLS | the service's topology, read by the control plane |
+
+A web-hosted service's pod has the HTTP port, served by the platform's proxy, and 7627 for readiness, and
+no cluster ports. Two more are on its loopback interface only: the process listens on its `processPort`,
+8080 by default, for the proxy, and the proxy on 7630 for the process's calls to other services. See
+[the web hosting reference](../reference/web-hosting.md#ports-in-a-web-hosted-pod).
 
 A Python or TypeScript service's pod has two more, on its loopback interface only: the process listens on
 9010 for the sidecar, and the sidecar on 9011 for the process. They carry plain gRPC, because the pod's
 loopback interface is shared by the pod's own containers and nothing else; the sidecar holds every
 certificate and terminates every connection from outside the pod.
+
+The observe port is how the control plane reads a deployed service's topology on a member's behalf. Its
+listener presents the service's certificate and requires the control plane's, `ankka://platform/controlplane`,
+refusing any other in the handshake; the network policy admits only the control plane's pods. The control
+plane reaches each instance by its pod address and requires the certificate to carry exactly the identity of
+the service it asked for. A member reading a topology is given the merged document and no credential for
+anything. The control plane is itself deployed by manifest rather than by the operator, so it has no observe
+port of its own.
 
 ## Readiness
 

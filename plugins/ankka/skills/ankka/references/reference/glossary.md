@@ -17,6 +17,17 @@ A component that carries out a task by talking to a model. A handler returns an 
 messages, tools and guardrails; the runtime runs the loop of model calls and tool calls. Agents are addressed
 by session.
 
+### Approval
+
+A person's "yes" to a tool call before it runs. A tool, or an MCP server, that requires approval is one
+whose tool calls wait for it. See [Agents](../build/agents.md#tools-that-wait-for-a-person).
+
+### Approval request
+
+What an agent records, and gives its caller instead of an answer, when its model calls a tool that requires
+approval: an id, the tool and the arguments the model proposed. It awaits a decision until a person decides
+it, or until its time limit passes and the platform refuses it.
+
 ### AnkkaService resource
 
 The Kubernetes custom resource, short name `asvc`, through which the control plane tells the operator what
@@ -28,6 +39,23 @@ the two share.
 The domain an installation serves under. The control plane answers at `api.<base domain>`, the identity
 provider at `auth.<base domain>`, and an exposed service at `<service>-<project>.<base domain>`. A local
 platform uses `127.0.0.1.sslip.io`.
+
+### Broker
+
+What holds topics and carries what is published to one to whatever reads it: Kafka. An installation has
+one, which the platform provides for every project; a descriptor may name another instead. See
+[The installation's broker](../platform/broker.md).
+
+### Broker variable
+
+A variable that says where a broker is or how to connect to it, beginning `ANKKA_KAFKA_`. A descriptor that
+gives one names a broker of its own; the platform gives them to every service with components on an
+installation with a broker.
+
+### Calling address
+
+The address, inside an instance of a web-hosted service, at which the process calls another service by
+name as the web-hosted service: `ANKKA_SERVICES_URL`. Nothing outside the instance can use it.
 
 ### Cluster
 
@@ -91,6 +119,18 @@ The service that operates the platform: it records organizations, projects and s
 who may change them, and projects each service's desired state into an AnkkaService resource. It is itself an
 ankka service. The CLI is its client.
 
+### Declared topic
+
+A topic a member declares on a project, once, with its partitions, which the platform makes on the
+installation's broker. Every service of the project publishes to it and reads it by its name; no service
+declares it. See [Broker topics](../build/topics.md#declaring-a-topic).
+
+### Decision
+
+A person's answer to an approval request: approved or refused, with who decided and an optional note the
+model is told. A request is decided once. Who decided is recorded; who may decide is the ACL of the route
+the decision is sent through.
+
 ### Delta
 
 One element of a graph as it now is, whole, at a version, or a tombstone marking it deleted: what a
@@ -106,6 +146,17 @@ Applied with `ankka services apply -f service.json`.
 
 What a service should be: its latest descriptor, whether it is paused, whether it is exposed. Recorded by the
 control plane when you change it, and reconciled towards by the operator.
+
+### Digest
+
+A short value computed from a service's descriptor: two descriptors share one exactly when they state the
+same things. A service's history shows one for each apply and rollback, so two generations with one image
+and a different environment can be told apart.
+
+### Due time
+
+When a timer is to fire. The runtime fires a timer at its due time or up to a poll interval after, never
+before, and tells the handler the due time it is run for; a retry after a failure is told the same one.
 
 ### Effect
 
@@ -129,8 +180,9 @@ descriptor's default `hosting`.
 
 ### Endpoint
 
-A component that turns HTTP requests into component calls. It declares a path prefix, an ACL and routes; the
-runtime serves them.
+A component that turns requests from outside the service into component calls, and holds no state. An HTTP
+endpoint declares a path prefix, an ACL and routes; a gRPC endpoint implements a service definition's methods
+under an ACL. The runtime serves both.
 
 ### Entity id
 
@@ -149,13 +201,19 @@ expose`. A service is private until exposed.
 
 ### Generation
 
-A counter on each service that increments on every apply and every restart. An observation states the
-generation it describes, so a late report about an older generation is discarded.
+A counter on each service that increments on every apply, every restart and every rollback. An
+observation states the generation it describes, so a late report about an older generation is discarded.
+A rollback is a new generation, never a return to an old number.
 
 ### Graph consumer
 
 A consumer that publishes its source as a graph. Its handlers return the elements a change leaves, and
 each is published as a delta under its element key, at the change's sequence number.
+
+### gRPC endpoint
+
+An endpoint that implements the methods of a service definition, served on the service's gRPC port. Scala
+services only. See [gRPC endpoints](../build/grpc-endpoints.md).
 
 ### Guardrail
 
@@ -166,6 +224,11 @@ text; output guardrails run on what the model produced.
 
 A method of a component that the runtime calls: a command, a query, a workflow step, a timed action's action,
 or an agent's handler. Each is declared with a wire name.
+
+### History
+
+What the control plane keeps of the changes members made to a service: what was done, at which generation,
+by whom and when, newest first, the last 50 of them. It is not what the service printed, which is its logs.
 
 ### Hostname
 
@@ -203,10 +266,22 @@ sessions.
 The name stored beside a serialized value in the journal, such as `shopping-cart-event`, which says which codec
 reads it. Changing a manifest leaves existing data unreadable.
 
+### MCP server
+
+A program outside the service that offers tools over the Model Context Protocol. An agent lists the servers
+whose tools its model is offered, each as `mcp__<server>__<tool>`, with the credential the platform sends
+it. See [MCP servers](../build/mcp-servers.md).
+
 ### Member
 
 A person or machine identity that belongs to an organization, as an owner or a member. The `member` role may
 create projects and deploy and operate services in them.
+
+### Mount
+
+A path of a web-hosted service together with the service of the same project that answers requests under
+it. The proxy passes such a request to the mounted service, which is told it came from the internet. A
+mount does not expose the mounted service.
 
 ### Observed state
 
@@ -228,10 +303,20 @@ is invisible to non-members.
 The organization role that can also rename and delete the organization and manage its members. Whoever creates
 an organization is its first owner.
 
+### Partition
+
+One of the parts a topic is divided into on a broker, each in order. The members of a consumer group divide
+a topic's partitions between them. A topic may be given more partitions and never fewer.
+
 ### Passivation
 
 Unloading an idle entity from memory. The next command rebuilds it from its journal. The default idle time is
 two minutes.
+
+### Period
+
+How long after one due time a recurring timer's next due time is. A period is a length of time, from one
+millisecond to 36,500 days; it says nothing of a time of day or a day of the week.
 
 ### Platform-admin
 
@@ -245,8 +330,9 @@ identity; its name and email are for display.
 
 ### Process
 
-In a process-hosted service, the container running your code in another language. It serves the sidecar
-protocol and never touches the database, the cluster or a model.
+The container running your own program beside the platform's: in a process-hosted service, your code in
+another language, serving the sidecar protocol and never touching the database, the cluster or a model; in
+a web-hosted service, any program that serves HTTP, beside the proxy.
 
 ### Process hosting
 
@@ -258,10 +344,23 @@ the same pod. Declared with `"hosting": "process"` and a `protocol` version.
 A group of services within an organization, deployed to one namespace. Services are named per project, and
 each project has its own database cluster.
 
+### Project secret
+
+A named set of entries a member sets for a project, held in a Kubernetes Secret in the project's
+namespace, which a descriptor's variable takes by `secretKeyRef`. The control plane writes it and can never
+read it back. Not a service secret. See [Secrets on the platform](../platform/secrets.md).
+
 ### Protocol version
 
 The version of the sidecar protocol a process-hosted service's SDK speaks, `MAJOR.MINOR`, such as `1.0`. The
 platform accepts the same major and a minor no later than its own.
+
+### Proxy
+
+In a web-hosted service's instance, the platform's program beside the process. It accepts every request
+from outside the instance, refuses one from a service the descriptor does not admit, tells the process who
+sent it and where it was sent, passes requests under a mount on, and sends the process's calls to other
+services. See [Deploy a user interface](../deploy/web-hosting.md).
 
 ### Query
 
@@ -283,19 +382,79 @@ The key a published message has on the broker, which decides which messages are 
 which record a compacted topic keeps. It is the key a message names, and the message's subject when it
 names none. Separate from the subject, which says which entity a message is about.
 
+### Reflection
+
+A service's answer to a tool that asks which service definitions it serves and what their methods and
+messages look like. A service answers it only when it opts in, and then only to the callers its own ACL for
+reflection admits.
+
+### Recurring timer
+
+A timer with a period. It fires for one due time after another, each the previous due time plus the period,
+until it is cancelled or replaced. A due time that passed while it could not run is not caught up: it fires
+once and goes on. Set again for the same handler with the same period, it keeps its next due time.
+
 ### Refusal
 
 A handler's deliberate "no", returned as an error effect with a message and an error code. Nothing is persisted
 and nothing is retried. It differs from a failure, which is a handler that threw.
 
+### Result guardrail
+
+A guardrail an agent declares for what an MCP server's tool answers. It runs before the model is told the
+result; a result it refuses is never told to the model, which is told of an error instead.
+
+### Rollback
+
+Applying again the descriptor a service recorded at an earlier generation, as a new generation. Nothing is
+rewound: the generation keeps counting, the history shows both, and the service's data is untouched.
+
 ### Row
 
-One record of a view, keyed by its source's subject and stored as JSON in the view's table.
+One record of a view, kept under its row key and stored as JSON in the view's table.
+
+### Row key
+
+What a row of a view is kept under. A plain view's row key is the id of the entity the change came from;
+a keyed view's handlers name their rows' keys.
+
+### Declared query
+
+A question a view can be asked by name: one SQL statement over the view's own table, whose values are the
+`:name`s it holds. It is checked when the service starts, and run in a read-only transaction.
+
+### Keyed view
+
+A view of one or more entities whose handlers name every row they write or delete by key, and read the
+view's own rows. It handles one change at a time.
 
 ### Runtime version
 
 The ankka version a service's image was built against, declared as `runtime` in its descriptor and served at
 `/ankka/version`. The platform accepts the same major and a minor equal to its own or one below.
+
+### Secret key
+
+What a service's secret store encrypts its service secrets with: 32 bytes, given as `ANKKA_SECRET_KEY`.
+The platform makes one per deployed service and keeps it when the service is deleted; only the platform's
+own program holds it.
+
+### Secret store
+
+Where a service keeps its service secrets: a table in its own database, holding each value encrypted with
+the service's secret key. Not an entity or a view, and nothing a projection reads. Offered to endpoints,
+workflow steps, consumers, timed actions and agents, never to an entity or a view.
+
+### Service definition
+
+A named set of gRPC methods written in a `.proto` file, which a gRPC endpoint implements and a client is
+generated from. A method's name in it is the method's wire name.
+
+### Service secret
+
+A named text value a service keeps in its secret store while it runs and reads back by that name, such as
+a credential a person gave it. See [Secrets a service keeps](../build/secrets.md).
+
 
 ### Session
 
@@ -312,6 +471,18 @@ at a time and moves when instances come and go.
 
 The ankka runtime running beside a process-hosted service in the same pod. It owns sharding, the journal,
 projections, timers, HTTP, the agent loop and cluster formation, and asks the process only for decisions.
+
+### Socket
+
+A connection a request to a socket route opens and that stays open, over which the client and the
+route's handler send each other frames — pieces of text — until one of them closes it. A socket is closed
+with a close reason its client is told by a close code, never cut off without being told. The platform
+carries a socket and keeps nothing of it.
+
+### Socket route
+
+A route of an HTTP endpoint answered by opening a socket rather than with one response. Its ACL is
+decided once, when the socket is opened.
 
 ### Source
 
@@ -345,7 +516,7 @@ they outlive the process that set them, and a failed call is retried with backof
 ### Timer
 
 A scheduled future call to a timed action, identified by a name. Scheduling again under the same name replaces
-it.
+it, except that a recurring timer set again for the same handler with the same period is kept as it is.
 
 ### Tombstone
 
@@ -354,8 +525,9 @@ delta arriving late cannot bring it back.
 
 ### Tool
 
-A function an agent's model may call, with a name, a description and a schema for its arguments. The runtime
-calls it with the model's arguments and hands the result back to the model.
+A function an agent's model may call, with a name, a description and a schema for its arguments: one of the
+agent's own, or one an MCP server has. The runtime calls it with the model's arguments and hands the result
+back to the model; a tool that requires approval waits for a person's decision first.
 
 ### Topic
 
@@ -373,8 +545,15 @@ usually time spent waiting on a database, a model, or work handed to another thr
 
 ### View
 
-A component that maintains a queryable table from a source's changes, answering questions no single entity can,
-such as "every cart containing this product".
+A component that maintains a queryable table from changes, answering questions no single entity can,
+such as "every cart containing this product". A plain view reads one source and keeps a row per entity of
+it; a keyed view reads several entities and names its rows' keys.
+
+### Web hosting
+
+`"hosting": "web"`: a service whose image is any program that serves HTTP, run beside the platform's
+proxy. It has no database, no components and no cluster. See [Deploy a user
+interface](../deploy/web-hosting.md).
 
 ### Wire name
 

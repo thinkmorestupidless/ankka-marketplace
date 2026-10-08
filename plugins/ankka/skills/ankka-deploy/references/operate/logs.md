@@ -28,6 +28,7 @@ cart-7d9f8b6c4-9wz4t: <a line the second instance printed>
 | `--previous` | Read the container that ran before the last restart instead of the current one. |
 | `--tail <n>` | Only the last `n` lines of each instance. |
 | `--since <seconds>` | Only lines from the last `n` seconds. |
+| `--platform` | Read the platform's container instead of yours, for a service with process or web hosting. |
 | `-o json` | The response as JSON: one entry per instance with its output, or the reason it could not be read. |
 
 `--project` (`-p`) selects the project, as for every service command. There is no option to follow the
@@ -46,18 +47,45 @@ An instance that has not restarted has no previous container, and says so rather
 `cart-7d9f8b6c4-2xkqp has no previous container — it has not restarted`. One instance that cannot be read
 does not stop the others from being printed; its line carries the reason instead.
 
-## A service in another language
+## A service with two containers
 
-`ankka services logs` does not yet read a service with process hosting. Its pods have two containers —
-the sidecar, named after the service, and your process, named `<service>-app` — and the logs command
-does not choose between them, which Kubernetes refuses for a pod with more than one container. Each
-instance's line carries that refusal instead of output. Until the command can choose, read the
-containers with `kubectl`, in the project's namespace:
+A service with process hosting runs your process beside the platform's sidecar, and a web-hosted
+service runs it beside the platform's proxy. Each pod holds two containers: the platform's, named after
+the service, and yours, named `<service>-app`. `ankka services logs` reads yours. Add `--platform` to read
+the platform's instead:
 
 ```bash
-kubectl -n ankka-checkout logs deploy/cart -c cart-app    # your process
-kubectl -n ankka-checkout logs deploy/cart -c cart        # the sidecar
+ankka services logs cart               # your process
+ankka services logs cart --platform    # the sidecar, or the proxy
 ```
+
+For a service whose pod has one container, `--platform` is refused:
+`--platform applies to a service with process or web hosting`.
+
+## Lines that name their trace
+
+A line written while a handler runs carries the trace and span it belongs to, in the logging context as
+`trace_id` and `span_id`, and the platform's own programs — the sidecar beside a process, the control
+plane, and every project `ankka init` makes — end such a line with them:
+
+```text
+12:00:01.123 INFO  c.t.a.cart.Cart - an item was added trace_id=4bf92f3577b34da6a3ce929d0e0e4736 span_id=00f067aa0ba902b7
+12:00:01.200 INFO  c.t.a.runtime.Ankka - ankka shopping-cart service started
+```
+
+A line written outside any handler carries neither, and ends exactly as it did before. That is what lets
+a log store join a service's lines to its traces in the collector the installation names. Logs are never
+exported: they are gathered from standard output, by [the telemetry store](telemetry.md) on a local
+platform and by the installation's own agent anywhere else.
+
+A Scala service whose `logback.xml` predates this prints the ids once its pattern names them; append this
+after `%msg`:
+
+```text
+%replace( trace_id=%X{trace_id} span_id=%X{span_id}){' trace_id= span_id=$', ''}
+```
+
+A Python or TypeScript process's own lines are its own, and carry no ids.
 
 ## What it is not
 
@@ -65,7 +93,7 @@ kubectl -n ankka-checkout logs deploy/cart -c cart        # the sidecar
 Kubernetes holds the output of a pod's current container and the one before it, so a service that has
 restarted many times has lost everything but its last two containers, and a pod that has been replaced
 has taken its logs with it. For retention and search, collect container output with the logging stack of
-the cluster you run on.
+the cluster you run on; on a local platform the telemetry store already does.
 
 Reading logs is the only thing that gives the control plane read access to pods. It can read pods and
 their logs, and nothing else about them; it cannot execute commands in a pod or change one.

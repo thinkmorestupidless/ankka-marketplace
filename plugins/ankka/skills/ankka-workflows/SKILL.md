@@ -1,6 +1,6 @@
 ---
 name: ankka-workflows
-description: Write, change or test an ankka workflow (a durable multi-step process with commands, steps, transitions, pauses, timeouts, retries and compensation) or a timer and timed action (a named, database-backed call made later) in Scala, Python, TypeScript or Rust. Use when the task names a workflow, a step, stepEffects, transitionTo, thenPause, RecoverStrategy, a saga or compensation, a timer, TimerScheduler, a timed action, or a deadline such as "cancel after thirty minutes".
+description: Write, change or test an ankka workflow (a durable multi-step process with commands, steps, transitions, pauses, timeouts, retries and compensation) or a timer and timed action (a named, database-backed call made later) in Scala, Python, TypeScript or Rust. Use when the task names a workflow, a step, stepEffects, transitionTo, thenPause, RecoverStrategy, a saga or compensation, a timer, a recurring timer, TimerScheduler, a timed action, or a deadline such as "cancel after thirty minutes".
 ---
 
 # ankka workflows and timers
@@ -65,6 +65,13 @@ reports success. Both exist because a chain of calls from an endpoint dies with 
 5. **Timers live in the service's database.** They outlive restarts and redeploys, and the sweeper is a
    cluster singleton polling once a second, which bounds lateness. Two services must never share a
    database: each deletes timers whose component it does not recognise.
+6. **Something run again and again is a recurring timer, not a handler that sets itself again.**
+   `createRecurringTimer(name, delay, period, call)` (Python `schedule_recurring`, TypeScript
+   `scheduleRecurring`, Rust `schedule_recurring`). Each next due is the previous due plus the period;
+   due times missed during an outage fire once, not once each. Set it where the service starts: set again
+   for the same handler and period it keeps its next due. A handler is told the due time it is run for
+   (`dueTime`, `due_time`, `ctx.due()`), the same on a retry, which is the key to make a repeat harmless.
+   A period is a length of time; for a time of day, work out the first delay.
 
 ## Coordinating agents from a workflow
 
@@ -104,6 +111,12 @@ fail"); a compensation test, for one, must make the step fail and then see what 
 - A timed action that errors when the order is already confirmed.
 - A test that reads the domain state to decide the workflow is finished; read the lifecycle.
 
+## Calling another service from a step
+
+A step, a consumer, a timed action and an agent's tool call another service as this service through
+their context's `services`; a workflow's command handler is refused, as for the secret store. See
+`references/build/calling-services.md`.
+
 ## Reference files
 
 Open the one a task needs; each is one topic and stands alone.
@@ -117,6 +130,8 @@ Open the one a task needs; each is one topic and stands alone.
 
 - `references/build/workflows.md` — Build a durable multi-step process in Scala or Python — commands, steps, transitions, pauses, timeouts, retries and compensation — that resumes where it stopped after a crash.
 - `references/build/timers.md` — Schedule a call for later with a timed action, cancel or replace it by name, and handle retries — timers are stored in the database and outlive the process that set them.
+- `references/build/secrets.md` — Keep a credential a person gives your service, such as a payment provider's key, in the service's secret store — encrypted in its own database, never in a journal, a snapshot or a view — and read it back by name.
 - `references/build/multi-agent-orchestration.md` — Coordinate several agents from a workflow — sequentially, in parallel, or chosen dynamically by another agent — sharing one session, and test the coordination with a scripted model.
+- `references/build/calling-services.md` — Call another service's routes as your own service — from an endpoint, a workflow step, a consumer, a timed action or an agent's tool, in Scala, Python, TypeScript or Rust — so that service's access rules can admit yours by name.
 - `references/build/component-client.md` — Call entities, workflows and agents through the component client — blocking or asynchronous, with typed refusals and timeouts — and query views through the view client.
 - `references/build/testing.md` — Test ankka components at two levels in Scala, Python, TypeScript and Rust, with unit test kits that run one component and nothing else, integration test kits that run the whole service against a real database, and scripted models.

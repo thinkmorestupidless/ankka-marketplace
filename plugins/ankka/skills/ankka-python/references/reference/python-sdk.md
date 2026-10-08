@@ -88,12 +88,24 @@ See [Key value entities](../build/key-value-entities.md).
 | Part | API |
 |---|---|
 | Base class | `ankka.view.View[Src, Row]` |
-| Class attributes | `component_id`, `source` (an entity class) or `topic` (a topic name), `event_codec`, `row_codec` |
+| Class attributes | `component_id`, `source` (an entity class) or `topic` (a topic name), `event_codec`, `row_codec`; optionally `version`, and declared queries as `query(name, statement)` from `ankka.view` |
 | Must define | `on_change(self, event) -> ViewEffect` |
 | May override | `on_delete(self) -> ViewEffect`, which deletes the row by default |
 | In a handler | `self.row` (the current row or `None`), `self.metadata` (`subject`, `sequence_number`), `self.effects` |
 | Effects | `update_row(row)`, `delete_row()`, `ignore()` |
-| Querying | `client.views.get(view_id, key, RowType)`, `client.views.all(view_id, RowType)` |
+| Querying | `client.views.get(view_id, key, RowType)`, `client.views.all(view_id, RowType)`, `client.views.ask(view_id, name, RowType, {"value": ...}, limit=None)` |
+| Table name | `table_of(component_id)`, for a statement to name |
+
+## Keyed view
+
+| Part | API |
+|---|---|
+| Base class | `ankka.keyed_view.KeyedView[Row]` |
+| Class attributes | `component_id`, `row_codec`; optionally `version` and declared queries |
+| Sources | a method per source marked `@on(EntityClass, event_codec)`; optionally `@on_deleted(EntityClass)` |
+| In a handler | `self.subject`, `self.metadata`, `self.rows.get(key)`, `self.rows.ask(name, ...)`, `self.effects` |
+| Effects | `update_row(key, row)`, `delete_row(key)`, `update_rows(...)`, `delete_rows(keys)`, `ignore()`, combined |
+| Testing | `KeyedViewTestKit.of(View)` |
 
 See [Views](../build/views.md).
 
@@ -102,7 +114,7 @@ See [Views](../build/views.md).
 | Part | API |
 |---|---|
 | Base class | `ankka.consumer.Consumer[Src, Out]` |
-| Class attributes | `component_id`, `source` or `topic`, `message_codec`; to publish, `produces_to` and `out_codec` |
+| Class attributes | `component_id`, `source` or `topic`, `message_codec`; for a topic, `start_from`, `contract`, `broker`, `parallel`; to publish, `produces_to` (a topic, or a `Publication` with its contract and broker) and `out_codec` |
 | Must define | `async on_message(self, message) -> ConsumerEffect` |
 | May override | `on_delete(self)`, which ignores by default |
 | In a handler | `self.metadata` (`subject`, `sequence_number`), `self.client`, `self.effects` |
@@ -121,7 +133,7 @@ nothing but deltas.
 | Part | API |
 |---|---|
 | Base class | `ankka.GraphConsumer[Src]`, in `ankka.graph` |
-| Class attributes | `component_id`, `source` or `topic`, `message_codec`, `produces_to`; no `out_codec` |
+| Class attributes | `component_id`, `source` or `topic`, `message_codec`, `produces_to`; `contract`, `broker`, `parallel` for a topic; no `out_codec` |
 | Must define | `on_message(self, message) -> GraphEffect`, which may be `async` |
 | May override | `on_delete(self)`, which ignores by default |
 | In a handler | `self.metadata`, `self.client`, `self.graph`, `self.effects` |
@@ -163,25 +175,33 @@ failed over. See [Workflows](../build/workflows.md).
 | Base class | `ankka.timed_action.TimedAction` |
 | Class attributes | `component_id` |
 | Decorators | `@action("name")` from `ankka.timed_action` |
-| In a handler | `self.metadata` (the timer's name and attempt count), `self.client`, `self.effects` |
+| In a handler | `self.metadata` (the timer's name and attempt count), `self.due_time` (the due time the run is for, a UTC `datetime`), `self.client`, `self.effects` |
 | Effects | `done()`, `fail(msg, code)` |
-| Scheduling | `await client.timers.schedule(timer_id, timedelta, component_id, action, input)`, `await client.timers.cancel(timer_id)` |
+| Scheduling | `await client.timers.schedule(timer_id, timedelta, component_id, action, input)`, `await client.timers.schedule_recurring(timer_id, delay, period, component_id, action, input)`, `await client.timers.cancel(timer_id)` |
 
-Scheduling twice under one id replaces the earlier timer. See [Timers](../build/timers.md).
+Scheduling twice under one id replaces the earlier timer, except that a recurring timer set again for
+the same handler with the same period keeps its next due time. See [Timers](../build/timers.md).
 
 ## Agent
 
 | Part | API |
 |---|---|
 | Base class | `ankka.agent.Agent` |
-| Class attributes | `component_id`, `tools` (`{name: Tool(description, function, InputDataclass)}`), `guardrails` (`{name: Guardrail(check)}`), optionally `role`, `max_tool_call_steps` |
+| Class attributes | `component_id`, `tools` (`{name: Tool(description, function, InputDataclass, approval=…)}`), `guardrails` (`{name: Guardrail(check)}`), optionally `role`, `max_tool_call_steps`, `mcp_servers` (`{name: McpServer(url=…, service=…, project=…, path=…, headers={header: "ANKKA_MCP_…"}, approval=…)}`), `result_guardrails` (`{name: ResultGuardrail(check)}`) |
+| Approval | `approval=True`, or `Approval(within=timedelta(…))` for a time limit |
+| Calling | `client.for_agent(id, session).call(name)`: `await .ask(input, reply=T)` → `Answered(value)` or `AwaitingApproval(requests)`; `await .decide(approval_id, approved=…, by=…, note=…)`, answered as `ask`; `.stream_parts(input)`; `.invoke` and `.stream` raise `ApprovalAwaited` |
 | Decorators | `@command("name")`, `@stream("name")` from `ankka.agent` |
 | In a handler | `self.session_id`, `self.metadata`, `self.client`, `self.effects` |
 | Effects | `system_message(t)`, `user_message(t)`, `model(name)`, then `.with_model(name)`, `.with_context(t)`, `.memory(bool)`, `.tools(*names)`, `.guardrails(*names)`, `.then_reply()`, `.then_reply_json()`; `error(msg, code)` |
 
 A handler returns a plan; the sidecar runs the model loop, calls tools back in the process with the model's
 arguments, and checks guardrails. A guardrail's check takes the stage (`"input"` or `"output"`) and the text,
-and returns `None` to pass or a reason to block. See [Agents](../build/agents.md).
+and returns `None` to pass or a reason to block; a result guardrail's takes the MCP tool's name and what it
+answered. The sidecar connects to the MCP servers and enforces approval, so the process never runs a server's
+tool nor a tool that awaits a decision. A runtime before protocol 1.11 answers `decide` with a `CommandError`
+saying it is too old. The unit kit takes scripted servers, `AgentTestKit.of(Agent, mcp={server: {tool: fn}})`,
+and its reply's `awaiting` lists what a turn waits on; `kit.decide(approval_id, approved, by, note)` goes on.
+See [Agents](../build/agents.md) and [MCP servers](../build/mcp-servers.md).
 
 ## Autonomous agent
 
@@ -189,11 +209,11 @@ and returns `None` to pass or a reason to block. See [Agents](../build/agents.md
 |---|---|
 | Task type | `TaskType(name, description, result=Dataclass, rules=(TaskRule(name, check),))`; a check returns `Accepted()` or `Rejected(reason)` |
 | Base class | `ankka.autonomous.AutonomousAgent` |
-| Class attributes | `component_id`, `description`, `accepts = [TaskAcceptance(task_type, max_iterations=n)]`, optionally `instructions`, `tools`, `guardrails`, `model`, `settings` |
+| Class attributes | `component_id`, `description`, `accepts = [TaskAcceptance(task_type, max_iterations=n)]`, optionally `instructions`, `tools`, `guardrails`, `model`, `settings`, `mcp_servers`, `result_guardrails` |
 | In a tool | `self.client`, `self.task_id` |
 | Tasks | `await client.tasks.create(task_type, instructions, id=…, attachments=[…], depends_on=[…])` |
 | A task | `client.for_task(id)`: `await .get(task_type)`, `.wait(task_type, timeout)`, `.cancel(reason)` |
-| An instance | `client.for_autonomous_agent(Agent, instance_id)`: `.assign(*ids)`, `.suspend()`, `.resume()`, `.terminate()`, `.state()`, `.notifications()` |
+| An instance | `client.for_autonomous_agent(Agent, instance_id)`: `.assign(*ids)`, `.suspend()`, `.resume()`, `.terminate()`, `.state()` (with `awaiting`), `.notifications()`, `.decide(approval_id, approved, by, note=None)` |
 | One task | `await client.for_autonomous_agent(Agent).run_single_task(task_type, instructions)` |
 | Testing | `AutonomousAgentTestKit.of(Agent)`: `run_tool`, `check_result`, `check_guardrail`; the integration kit's `await_task` and `notifications`, with `ANKKA_MODEL_SCRIPT` turns that may carry `when` or `when_tool_result` |
 
@@ -206,10 +226,12 @@ result against its task type and rules. See [Autonomous agents](../build/autonom
 |---|---|
 | Base class | `Endpoint` |
 | Class attributes | `prefix`, `acl` (required: `Acl.ALLOW_ALL`, `Acl.DENY_ALL`, `Acl.AUTHENTICATED` or `Acl.allow_callers(...)`) |
-| Decorators | `@get`, `@post`, `@put`, `@patch`, `@delete`, `@sse`, each with a path template and an optional `acl=` for that route alone |
+| Named events | an `@sse` handler may yield `SseEvent(name, value)` among its text, sent as an event of that name with the value as JSON (protocol 1.11) |
+| Decorators | `@get`, `@post`, `@put`, `@patch`, `@delete`, `@sse`, `@socket`, each with a path template and an optional `acl=` for that route alone |
+| A socket | the handler's parameter annotated `Socket`: `async for text in socket`, `await socket.receive()` (`None` once closed), `await socket.send(text)`, which raises `SocketClosed` once closed; testing, `EndpointTestKit.socket(path, frames)` answers what the handler sent and how it ended |
 | Handlers | `async` methods; path parameters bind by name, one further typed parameter is the body, the return value is encoded by its type |
 | Callers | `Callers.internet`, `Callers.service(name, project=None)`, `Callers.any_in_project`, `Callers.self_` |
-| In a handler | `self.request`: `query_param`, `query_params`, `header`, `principal`, `metadata`, `caller` — a `Gateway`, `ServiceCaller(project, name)` or `LocalCaller` |
+| In a handler | `self.request`: `query_param`, `query_params`, `header`, `principal` (`subject`, `name`, `email`, `email_verified`, `roles`, `claims`, `issuer`), `metadata`, `caller` — a `Gateway`, `ServiceCaller(project, name)` or `LocalCaller` |
 | Errors | raise `HttpProblem(status, message)`; a `CommandError` from a call answers with its code's status |
 
 The constructor receives the component client when it takes one. The process never binds an HTTP port: the
@@ -237,6 +259,32 @@ state = await cart.call("get-cart").invoke(reply=ShoppingCart)
 `async for token in invocation.stream(input)` for a streaming agent handler. A refusal raises
 `ankka.client.CommandError`, whose `error` holds the message and code. Passing a request's metadata on
 makes the call a child span of the request's trace. See [Calling components](../build/component-client.md).
+
+## Secret store
+
+The service's secret store, for a value it must keep and never record, such as a credential a person
+gave it ([Secrets a service keeps](../build/secrets.md)). An endpoint, a consumer, a graph consumer, a
+timed action, an agent and an autonomous agent reach it as `self.secrets`, and a workflow in a step; an
+entity's `CommandContext` and a `View` have no `secrets` at all, and a workflow's command handler is
+refused. `await self.secrets.put(name, value)`, `await self.secrets.get(name)` (the value, or `None`) and
+`await self.secrets.delete(name)`. A refusal is a `CommandError` with the runtime's code.
+
+The runtime beside the process holds the store and its key; the process never sees the key. For a unit
+test, assign `component.secrets = InMemorySecrets()`, which applies the runtime's rules. The integration
+test kit puts a generated `ANKKA_SECRET_KEY` on the runtime it starts; `env={"ANKKA_SECRET_KEY": ""}`
+starts one with none. Needs protocol 1.4: an earlier runtime is reported as too old for the store.
+
+## Other services
+
+An endpoint, a consumer, a graph consumer, a timed action, an agent and an autonomous agent call another
+service as this one through `self.services`, and a workflow in a step; an entity's `CommandContext` and a
+`View` have none. `self.services("orders")` or `self.services("invoices", project="billing")` answers a
+client with `await get(path, returns)`, `get_text(path)`, `post(path, body, returns)`,
+`put(path, body, returns)`, `delete(path)` and `request(method, path, body=, content_type=, headers=)`.
+No answer is `ServiceUnresolvable`, `ServiceIdentityMismatch` or `ServiceUnanswered`; an answer outside 2xx
+to a typed helper is `ServiceCallFailed`; all four are `ServiceError`. For a unit test, assign
+`component.services = ScriptedServices()`. Needs protocol 1.8: an earlier runtime is reported as too old
+to call another service. See [Calling other services](../build/calling-services.md).
 
 ## Running a service
 

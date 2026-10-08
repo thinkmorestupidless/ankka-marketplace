@@ -739,6 +739,9 @@ Usage:
     ankka projects rename
     ankka projects delete
     ankka projects registry
+    ankka projects secrets
+    ankka projects topics
+    ankka projects brokers
 
 Manage projects.
 
@@ -759,6 +762,12 @@ Subcommands:
         Delete a project. It must have no services.
     registry
         Credentials the cluster pulls this project's private images with.
+    secrets
+        Project secrets: values a descriptor's variables take by secretKeyRef, which the control plane writes to the cluster and can never read back.
+    topics
+        A project's topics on the installation's broker: declared once, on the project, with their partitions; every service of the project uses them by name.
+    brokers
+        Brokers a project declares beside the installation's, which a component may name for one topic; the credential is a project secret, mounted for the platform's program alone.
 ```
 
 ### `ankka projects list`
@@ -937,6 +946,308 @@ Options and flags:
         Output format: table or json.
 ```
 
+### `ankka projects secrets`
+
+```text
+Usage:
+    ankka projects secrets set
+    ankka projects secrets unset
+    ankka projects secrets list
+
+Project secrets: values a descriptor's variables take by secretKeyRef, which the control plane writes to the cluster and can never read back.
+
+Options and flags:
+    --help
+        Display this help text.
+
+Subcommands:
+    set
+        Set entries of a project secret, keeping its others. KEY=- reads that value from standard input.
+    unset
+        Remove one entry of a project secret.
+    list
+        List a project's secrets: names and entries, never values.
+```
+
+### `ankka projects secrets set`
+
+```text
+Usage: ankka projects secrets set [--url <string>] [--token <string>] [--project <string>] [--output <string>] <name> <KEY=VALUE>...
+
+Set entries of a project secret, keeping its others. KEY=- reads that value from standard input.
+
+Options and flags:
+    --help
+        Display this help text.
+    --url <string>
+        Control plane base URL. Defaults to the configured value.
+    --token <string>
+        Bearer token. Prefer ANKKA_TOKEN or the config file.
+    --project <string>, -p <string>
+        Project id. Defaults to the configured project.
+    --output <string>, -o <string>
+        Output format: table or json.
+```
+
+### `ankka projects secrets unset`
+
+```text
+Usage: ankka projects secrets unset [--url <string>] [--token <string>] [--project <string>] [--output <string>] <name> <KEY>
+
+Remove one entry of a project secret.
+
+Options and flags:
+    --help
+        Display this help text.
+    --url <string>
+        Control plane base URL. Defaults to the configured value.
+    --token <string>
+        Bearer token. Prefer ANKKA_TOKEN or the config file.
+    --project <string>, -p <string>
+        Project id. Defaults to the configured project.
+    --output <string>, -o <string>
+        Output format: table or json.
+```
+
+### `ankka projects secrets list`
+
+```text
+Usage: ankka projects secrets list [--url <string>] [--token <string>] [--project <string>] [--output <string>]
+
+List a project's secrets: names and entries, never values.
+
+Options and flags:
+    --help
+        Display this help text.
+    --url <string>
+        Control plane base URL. Defaults to the configured value.
+    --token <string>
+        Bearer token. Prefer ANKKA_TOKEN or the config file.
+    --project <string>, -p <string>
+        Project id. Defaults to the configured project.
+    --output <string>, -o <string>
+        Output format: table or json.
+```
+
+### `ankka projects topics`
+
+```text
+Usage:
+    ankka projects topics set
+    ankka projects topics unset
+    ankka projects topics list
+    ankka projects topics schema
+
+A project's topics on the installation's broker: declared once, on the project, with their partitions; every service of the project uses them by name.
+
+Options and flags:
+    --help
+        Display this help text.
+
+Subcommands:
+    set
+        Declare a topic on the project, or give it more partitions. A topic is never given fewer. --compacted keeps the last message under each key; --contract and --schema declare what the topic carries, which every side must state.
+    unset
+        Stop declaring a topic. The topic and what was published to it stay on the broker.
+    list
+        List a project's topics, with how far the platform has got with each.
+    schema
+        A topic's contract schema: fetch it to build against.
+```
+
+### `ankka projects topics set`
+
+```text
+Usage: ankka projects topics set --partitions <integer> [--compacted] [--contract <string>] [--schema <string>] [--url <string>] [--token <string>] [--project <string>] [--output <string>] <name>
+
+Declare a topic on the project, or give it more partitions. A topic is never given fewer. --compacted keeps the last message under each key; --contract and --schema declare what the topic carries, which every side must state.
+
+Options and flags:
+    --help
+        Display this help text.
+    --partitions <integer>
+        How many partitions the topic has.
+    --compacted
+        The broker keeps the last message under each key.
+    --contract <string>
+        The contract's name, such as order.v1; needs --schema.
+    --schema <string>
+        The contract's schema document, a JSON file; - reads standard input.
+    --url <string>
+        Control plane base URL. Defaults to the configured value.
+    --token <string>
+        Bearer token. Prefer ANKKA_TOKEN or the config file.
+    --project <string>, -p <string>
+        Project id. Defaults to the configured project.
+    --output <string>, -o <string>
+        Output format: table or json.
+```
+
+### `ankka projects topics unset`
+
+```text
+Usage: ankka projects topics unset [--url <string>] [--token <string>] [--project <string>] [--output <string>] <name>
+
+Stop declaring a topic. The topic and what was published to it stay on the broker.
+
+Options and flags:
+    --help
+        Display this help text.
+    --url <string>
+        Control plane base URL. Defaults to the configured value.
+    --token <string>
+        Bearer token. Prefer ANKKA_TOKEN or the config file.
+    --project <string>, -p <string>
+        Project id. Defaults to the configured project.
+    --output <string>, -o <string>
+        Output format: table or json.
+```
+
+### `ankka projects topics list`
+
+```text
+Usage: ankka projects topics list [--url <string>] [--token <string>] [--project <string>] [--output <string>]
+
+List a project's topics, with how far the platform has got with each.
+
+Options and flags:
+    --help
+        Display this help text.
+    --url <string>
+        Control plane base URL. Defaults to the configured value.
+    --token <string>
+        Bearer token. Prefer ANKKA_TOKEN or the config file.
+    --project <string>, -p <string>
+        Project id. Defaults to the configured project.
+    --output <string>, -o <string>
+        Output format: table or json.
+```
+
+### `ankka projects topics schema`
+
+```text
+Usage: ankka projects topics schema get
+
+A topic's contract schema: fetch it to build against.
+
+Options and flags:
+    --help
+        Display this help text.
+
+Subcommands:
+    get
+        Print the schema document the topic's contract was declared with.
+```
+
+### `ankka projects topics schema get`
+
+```text
+Usage: ankka projects topics schema get [--url <string>] [--token <string>] [--project <string>] [--output <string>] <name>
+
+Print the schema document the topic's contract was declared with.
+
+Options and flags:
+    --help
+        Display this help text.
+    --url <string>
+        Control plane base URL. Defaults to the configured value.
+    --token <string>
+        Bearer token. Prefer ANKKA_TOKEN or the config file.
+    --project <string>, -p <string>
+        Project id. Defaults to the configured project.
+    --output <string>, -o <string>
+        Output format: table or json.
+```
+
+### `ankka projects brokers`
+
+```text
+Usage:
+    ankka projects brokers set
+    ankka projects brokers unset
+    ankka projects brokers list
+
+Brokers a project declares beside the installation's, which a component may name for one topic; the credential is a project secret, mounted for the platform's program alone.
+
+Options and flags:
+    --help
+        Display this help text.
+
+Subcommands:
+    set
+        Declare a broker, or change where it is. The project secret holds ca.crt with tls.crt and tls.key (shape certificate), or ca.crt with username and password (shape sasl).
+    unset
+        Stop declaring a broker. A service naming it is refused at its next start.
+    list
+        List a project's declared brokers.
+```
+
+### `ankka projects brokers set`
+
+```text
+Usage: ankka projects brokers set --bootstrap <string> --shape <string> --secret <string> [--url <string>] [--token <string>] [--project <string>] [--output <string>] <name>
+
+Declare a broker, or change where it is. The project secret holds ca.crt with tls.crt and tls.key (shape certificate), or ca.crt with username and password (shape sasl).
+
+Options and flags:
+    --help
+        Display this help text.
+    --bootstrap <string>
+        The broker's address, host:port[,host:port].
+    --shape <string>
+        certificate or sasl.
+    --secret <string>
+        The project secret holding the credential.
+    --url <string>
+        Control plane base URL. Defaults to the configured value.
+    --token <string>
+        Bearer token. Prefer ANKKA_TOKEN or the config file.
+    --project <string>, -p <string>
+        Project id. Defaults to the configured project.
+    --output <string>, -o <string>
+        Output format: table or json.
+```
+
+### `ankka projects brokers unset`
+
+```text
+Usage: ankka projects brokers unset [--url <string>] [--token <string>] [--project <string>] [--output <string>] <name>
+
+Stop declaring a broker. A service naming it is refused at its next start.
+
+Options and flags:
+    --help
+        Display this help text.
+    --url <string>
+        Control plane base URL. Defaults to the configured value.
+    --token <string>
+        Bearer token. Prefer ANKKA_TOKEN or the config file.
+    --project <string>, -p <string>
+        Project id. Defaults to the configured project.
+    --output <string>, -o <string>
+        Output format: table or json.
+```
+
+### `ankka projects brokers list`
+
+```text
+Usage: ankka projects brokers list [--url <string>] [--token <string>] [--project <string>] [--output <string>]
+
+List a project's declared brokers.
+
+Options and flags:
+    --help
+        Display this help text.
+    --url <string>
+        Control plane base URL. Defaults to the configured value.
+    --token <string>
+        Bearer token. Prefer ANKKA_TOKEN or the config file.
+    --project <string>, -p <string>
+        Project id. Defaults to the configured project.
+    --output <string>, -o <string>
+        Output format: table or json.
+```
+
 ### `ankka services`
 
 ```text
@@ -948,7 +1259,9 @@ Usage:
     ankka services pause
     ankka services resume
     ankka services restart
+    ankka services rollback
     ankka services logs
+    ankka services topology
     ankka services history
     ankka services expose
     ankka services unexpose
@@ -975,8 +1288,12 @@ Subcommands:
         Start a paused service again.
     restart
         Replace a service's instances.
+    rollback
+        Apply the descriptor of an earlier generation again, as a new generation.
     logs
         Print a deployed service's recent output.
+    topology
+        What a deployed service is made of and what calls what, merged across its instances.
     history
         Who did what to a service, newest first.
     expose
@@ -1131,10 +1448,32 @@ Options and flags:
         Output format: table or json.
 ```
 
+### `ankka services rollback`
+
+```text
+Usage: ankka services rollback [--to-generation <integer>] [--url <string>] [--token <string>] [--project <string>] [--output <string>] <name>
+
+Apply the descriptor of an earlier generation again, as a new generation.
+
+Options and flags:
+    --help
+        Display this help text.
+    --to-generation <integer>
+        The generation to roll back to; otherwise the most recent with a different descriptor.
+    --url <string>
+        Control plane base URL. Defaults to the configured value.
+    --token <string>
+        Bearer token. Prefer ANKKA_TOKEN or the config file.
+    --project <string>, -p <string>
+        Project id. Defaults to the configured project.
+    --output <string>, -o <string>
+        Output format: table or json.
+```
+
 ### `ankka services logs`
 
 ```text
-Usage: ankka services logs [--instance <string>] [--previous] [--tail <integer>] [--since <integer>] [--url <string>] [--token <string>] [--project <string>] [--output <string>] <name>
+Usage: ankka services logs [--instance <string>] [--previous] [--tail <integer>] [--since <integer>] [--platform] [--url <string>] [--token <string>] [--project <string>] [--output <string>] <name>
 
 Print a deployed service's recent output.
 
@@ -1149,6 +1488,28 @@ Options and flags:
         Only the last N lines.
     --since <integer>
         Only the last N seconds.
+    --platform
+        Read the platform's container instead of yours: the sidecar of a process-hosted service, or the proxy of a web-hosted one.
+    --url <string>
+        Control plane base URL. Defaults to the configured value.
+    --token <string>
+        Bearer token. Prefer ANKKA_TOKEN or the config file.
+    --project <string>, -p <string>
+        Project id. Defaults to the configured project.
+    --output <string>, -o <string>
+        Output format: table or json.
+```
+
+### `ankka services topology`
+
+```text
+Usage: ankka services topology [--url <string>] [--token <string>] [--project <string>] [--output <string>] <name>
+
+What a deployed service is made of and what calls what, merged across its instances.
+
+Options and flags:
+    --help
+        Display this help text.
     --url <string>
         Control plane base URL. Defaults to the configured value.
     --token <string>
@@ -1162,13 +1523,15 @@ Options and flags:
 ### `ankka services history`
 
 ```text
-Usage: ankka services history [--url <string>] [--token <string>] [--project <string>] [--output <string>] <name>
+Usage: ankka services history [--generation <integer>] [--url <string>] [--token <string>] [--project <string>] [--output <string>] <name>
 
 Who did what to a service, newest first.
 
 Options and flags:
     --help
         Display this help text.
+    --generation <integer>
+        Print the descriptor applied at this generation instead, as JSON to apply.
     --url <string>
         Control plane base URL. Defaults to the configured value.
     --token <string>
@@ -1329,7 +1692,7 @@ Options and flags:
     --help
         Display this help text.
     --language <string>, -l <string>
-        scala (the default), python, typescript or rust.
+        scala (the default), python, typescript or rust; or web, for a user interface.
     --template <string>
         Scala only: a Giter8 template, e.g. file:///path/to/ankka.g8.
     --package <string>
@@ -1341,7 +1704,9 @@ Options and flags:
 ### `ankka local`
 
 ```text
-Usage: ankka local console
+Usage:
+    ankka local web
+    ankka local console
 
 Tools for services running on this machine.
 
@@ -1350,8 +1715,28 @@ Options and flags:
         Display this help text.
 
 Subcommands:
+    web
+        Run a web-hosted service's process on this machine as the platform would in a cluster: its mounts answer at their paths, and it calls services by name.
     console
         Serve a console over the services running on this machine.
+```
+
+### `ankka local web`
+
+```text
+Usage: ankka local web [--file <string>] [--port <integer>] [--service <string>]... [<command>...]
+
+Run a web-hosted service's process on this machine as the platform would in a cluster: its mounts answer at their paths, and it calls services by name.
+
+Options and flags:
+    --help
+        Display this help text.
+    --file <string>, -f <string>
+        The service's descriptor (default service.json).
+    --port <integer>
+        Where to listen (default 3000).
+    --service <string>
+        Where a service is, as name=url, for one that is not running under the local console's eye. Repeatable.
 ```
 
 ### `ankka local console`

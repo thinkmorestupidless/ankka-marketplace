@@ -34,16 +34,18 @@ Discovery is the first conversation. The sidecar calls `Discovery.Discover` with
 runtime version, retrying with backoff until the process answers or `ANKKA_SIDECAR_DISCOVERY_TIMEOUT`
 (60 seconds by default) passes. The process answers with a `Spec`:
 
-- its protocol version, `"1.3"`;
+- its protocol version, `"1.12"`;
 - its SDK's name and version;
 - every component: its kind, its component id, and its handlers, each with a wire name and whether it is
   read-only or streaming, plus the kind's details — snapshot frequency for an event sourced entity; steps
-  and settings for a workflow; the source, row manifest and queries for a view; the source and topic for a
+  and settings for a workflow; the source (or, for a keyed view, the sources), row manifest, queries and
+  declared queries for a view; the source and topic for a
   consumer; the tools, with descriptions and JSON Schemas, and guardrails for an agent; and for an
   autonomous agent its whole definition — description, instructions, tools, guardrails, model, task types
   with their result schemas and rule names, and the types it accepts with their iteration budgets;
 - every HTTP endpoint: its prefix, ACL and routes, where a route may carry an ACL of its own that replaces
-  the endpoint's for that route alone — a route that carries none is served under the endpoint's.
+  the endpoint's for that route alone — a route that carries none is served under the endpoint's — and
+  may be a socket route, always a `GET` with no body.
 
 The sidecar validates the whole `Spec` and hosts exactly what it describes. If anything is wrong it calls
 `Discovery.ReportError` once, with every problem, and refuses to start. A process should log what it is told;
@@ -64,11 +66,18 @@ The table is generated from the `.proto` files.
 | `Client` | `Query` | `QueryRequest` | `QueryReply` | `client.proto` |
 | `Client` | `Schedule` | `ScheduleRequest` | `Empty` | `client.proto` |
 | `Client` | `Cancel` | `CancelRequest` | `Empty` | `client.proto` |
+| `Client` | `GetSecret` | `GetSecretRequest` | `GetSecretReply` | `client.proto` |
+| `Client` | `PutSecret` | `PutSecretRequest` | `PutSecretReply` | `client.proto` |
+| `Client` | `DeleteSecret` | `DeleteSecretRequest` | `DeleteSecretReply` | `client.proto` |
+| `Client` | `Request` | `ServiceRequest` | `ServiceReply` | `client.proto` |
+| `Client` | `Decide` | `DecideRequest` | `InvokeReply` | `client.proto` |
+| `Client` | `ScheduleRecurring` | `ScheduleRecurringRequest` | `ScheduleRecurringReply` | `client.proto` |
 | `Consumer` | `Handle` | `ConsumerRequest` | `ConsumerEffect` | `consumer.proto` |
 | `Discovery` | `Discover` | `SidecarInfo` | `Spec` | `discovery.proto` |
 | `Discovery` | `ReportError` | `Problem` | `Empty` | `discovery.proto` |
 | `Http` | `Handle` | `HttpRequest` | `HttpReply` | `endpoint.proto` |
 | `Http` | `HandleStream` | `HttpRequest` | `stream StreamFrame` | `endpoint.proto` |
+| `Http` | `HandleSocket` | `stream SocketIn` | `stream SocketOut` | `endpoint.proto` |
 | `EventSourced` | `Handle` | `stream EventSourcedIn` | `stream EventSourcedOut` | `event_sourced.proto` |
 | `KeyValue` | `Handle` | `stream KeyValueIn` | `stream KeyValueOut` | `key_value.proto` |
 | `TimedAction` | `Invoke` | `TimedActionRequest` | `TimedActionEffect` | `timed_action.proto` |
@@ -113,6 +122,18 @@ sends `complete_task` or `fail_task` to the process; they are its own.
 A view, consumer or timed action is called once per change or timer, with a payload and metadata, and
 answers with one effect. An HTTP route is called once per request, or once per stream for a server-sent
 events route.
+
+A socket route is one `Http.HandleSocket` call for as long as its socket is open. The sidecar holds the
+socket: it decides the ACL when the socket is opened, enforces the frame limits, pings a quiet socket and
+sends the close code. It sends `open` first — the opening request, with its path arguments, query,
+headers, principal, caller and metadata, whose `ankka.protocol` entry states the runtime's version — then
+a `frame` for each frame the client sent, in order, and `closed` with the reason once the socket is
+closed, after which it ends its side. It reads the process's side only as the client can take it, and
+sends a client's frame only when the process can take one, so a process that does not read leaves the
+frames to the socket's own unread bound. The process sends a `frame` for each frame for the client and
+ends with `completed`, which closes the socket `1000`, or `failed`, which closes it `1011`; a process that
+stops or goes away is `failed`. A message with no case set, in either direction, is a protocol violation
+that closes the socket as failed, never one that is skipped.
 
 A consumer's effect is one of four: `produce`, one message for the consumer's topic; `produce_all`,
 several; `done`; or `ignore`.
@@ -168,10 +189,36 @@ made, and a failure is a handler that could not decide. See [Error codes](error-
 
 ## Versioning
 
-The protocol version is `MAJOR.MINOR`, currently `1.3`, and both sides state it in discovery. `1.1` added
+The protocol version is `MAJOR.MINOR`, currently `1.12`, and both sides state it in discovery. `1.1` added
 the caller to forwarded requests and caller-naming ACLs; `1.2` added the autonomous agent; `1.3` added a
 consumer's reply of several messages, each with an optional record key, and the `ankka.protocol` entry
-on a consumer's request.
+on a consumer's request; `1.4` added metadata to a workflow step, a tool call, a guardrail check, a result
+check and a view query, so a call or a query made from any of them carries its trace and says which handler
+made it; `1.5` added every other claim of a verified token, and the name of the issuer
+that verified it, to a route's principal; `1.6` added the service's secret store, `GetSecret`, `PutSecret` and
+`DeleteSecret` on `Client`, each answering a refusal in its reply. A process built for `1.6` that calls the
+store on an earlier runtime is answered `UNIMPLEMENTED`, which each SDK reports as the runtime being too
+old for the store. `1.7` added where a view's or a consumer's topic source starts, and the version it
+reads at. `1.8` added `Request` on `Client`: a call to another service, which the runtime makes
+as the service, answering the service's answer, a failure naming why no answer came, or a refusal. A
+process built for `1.8` that calls it on an earlier runtime is answered `UNIMPLEMENTED`, which each SDK
+reports as the runtime being too old to call another service; a process that declared an earlier minor
+and sends one all the same is refused, naming both versions. `1.9` added socket routes: `Route.socket`
+in discovery and `Http.HandleSocket`. A socket route is refused from both ends across that line: the
+sidecar refuses a `Spec` declaring one under an earlier minor, naming the route and both versions, and an
+SDK refuses to answer discovery with one to a runtime that states an earlier version. `1.10` changed no message: it added three imports for a WebAssembly module, `request`, `now` and `random`, which the [WebAssembly ABI](wasm-abi.md) describes. A process is the same at `1.9` and `1.10`. `1.11` added approvals, MCP servers and result
+guardrails to agents: a tool's `approval` and an agent's `mcp_servers` and `result_guardrails` in discovery,
+the `RESULT` stage of `CheckGuardrail` with the MCP tool it checks, the `approval` case of `InvokeReply` and
+`StreamToken` that answers a turn waiting for a person, and `Decide` on `Client`, which sends a person's
+decision, and the `event` case of `StreamFrame`, which sends a server-sent event under a name of its own — an
+approval request, say — from a stream route. The sidecar connects to the MCP servers and enforces approval itself: a process is never asked to
+run an MCP server's tool, nor a tool that awaits a decision. A process built for `1.11` that decides on an
+earlier runtime is answered `UNIMPLEMENTED`, which each SDK reports as the runtime being too old. `1.12` added recurring timers:
+`ScheduleRecurring` on `Client`, with a delay and a period and a refusal in its reply, and `ankka.due` on every
+timed action's request. A recurring timer is a call of its own rather than a field on `ScheduleRequest`
+because an earlier runtime reads a field it does not know as absent, and would schedule a timer meant to
+recur to fire once; it answers the call `UNIMPLEMENTED` instead, which each SDK reports as the runtime being
+too old for recurring timers.
 
 - Adding an optional field, a message, an RPC or a fixture is a minor change. A sidecar speaking a later minor
   accepts an SDK that declares an earlier one.
@@ -210,6 +257,18 @@ These are part of the protocol, and an SDK that ignores one misbehaves in ways t
   the metadata entry `ce-subject`, and the change's sequence number as `ankka.sequence`: an event's sequence
   number, a key value entity's revision, and `0` for a topic's message. A deletion has a sequence number
   of its own, above every earlier change to the entity, for both kinds of entity.
+- **A keyed view's change names its source and carries no row.** A view declared with `sources` rather than
+  `source` is sent each change with `source_id`, the component it came from, and answers `rows`: the rows to
+  write and to delete, by key, in order, a later change to a key winning; an empty list is nothing. It reads
+  its own rows through `Client.Query` — `get` by key, or one of its declared queries by name with `values`.
+  The runtime handles one of its changes at a time and writes all of a change's rows together or none.
+- **A declared query is asked by name with its values.** `QueryRequest.name` names one of the view's
+  declared queries and `values` gives each `:name` the statement holds, as text; `limit` bounds the rows,
+  1000 when absent. The statement is the runtime's to check when the process is discovered: a process sends
+  it as the developer wrote it and parses nothing.
+- **An SDK refuses a runtime older than what it declares.** One that declares a keyed view, a declared query
+  or a version on a view that reads entities refuses discovery from a runtime below 1.13, as one that
+  declares a start position refuses a runtime below 1.7: an older runtime would ignore the declaration.
 - **An SDK answers `produce_all` only to a runtime that says it accepts it.** A consumer's request carries
   the metadata entry `ankka.protocol`, the protocol version the runtime speaks. A runtime that does not know
   a reply reads it as no effect and records the change as handled, so an SDK about to answer `produce_all`
@@ -217,14 +276,21 @@ These are part of the protocol, and an SDK that ignores one misbehaves in ways t
   version it was given and which it needs. A handler that returns one message with no key is answered as
   `produce`, and one that returns none as `done`, on a runtime of any version.
 - **A timed action's payload is what the process scheduled**, carried through the timer table unread. The
-  timer's name and the attempt count arrive as metadata `ankka.timer` and `ankka.attempts`. A `fail`, an
-  exception or an unreachable process is retried on the sweeper's schedule with the count incremented.
+  timer's name, the attempt count and the due time the run is for arrive as metadata `ankka.timer`,
+  `ankka.attempts` and `ankka.due`, the last in milliseconds since the epoch. A `fail`, an exception or an
+  unreachable process is retried on the sweeper's schedule with the count incremented and the same
+  `ankka.due`.
 - **An agent plan names; it does not carry.** `AgentPlan.model`, `tools` and `guardrails` are names the
   sidecar resolves against its configuration and against discovery. The process is called back for a tool
   with the model's arguments as JSON text, and for a guardrail with the stage and the text. The loop, the
   session memory and the model key stay in the sidecar. A tool or guardrail call arrives after the handler
   that planned it has returned, so anything it needs from the session must be captured when the plan is
   made.
+- **`ankka-caller` is the runtime's, carried and never written.** Metadata the runtime sends with a command,
+  a step, a tool call or a check carries `ankka-trace-id`, `ankka-span-id` and `ankka-caller`, the handler
+  whose work this is. An SDK forwards a handler's metadata unchanged on the calls it makes through the
+  client, which is how those calls are attributed; user code never sets `ankka-caller`, and the runtime
+  ignores one that does not name a component and handler the service declared.
 - **`Unavailable` means try again.** When an instance stops while callers are waiting on it, for example
   during a rolling replacement, the sidecar answers each waiting caller with `UNAVAILABLE` rather than letting
   it time out, and the sidecar's `Client` retries `UNAVAILABLE` briefly before giving up. An SDK should treat

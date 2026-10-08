@@ -48,8 +48,10 @@ limits:
 | `medium` | 1000m | 1024Mi |
 | `large` | 2000m | 2048Mi |
 
-For a Python service the size applies to the sidecar, which runs the runtime. Your process's container
-has a small fixed size of 100m CPU and 128Mi memory.
+For a process-hosted service the size applies to the sidecar, which runs the runtime. Your process's
+container is sized by the descriptor's `resources.process`, requests equal to limits, and is given 100m
+CPU and 128Mi memory when the descriptor says nothing; see
+[the service descriptor](../reference/service-descriptor.md#the-process-container).
 
 ## Deploys roll without downtime
 
@@ -68,6 +70,11 @@ Each stopping instance keeps serving for five seconds before it is told to stop.
 Service's endpoints the moment its deletion starts, but each node's network proxy learns that up to a
 second later, and in that second a request can still be routed to the old instance. The pause, a
 `preStop` sleep, lets those requests be answered rather than refused.
+
+While an entity moves from a stopping instance to another, a call to it can be lost: the platform
+delivers each call at most once during the move. A query that goes unanswered is sent again and
+answered. A command is not sent again, since it may have run, and its caller gets a timeout after
+`ankka.ask-timeout`. See [Limitations](../reference/limitations.md#platform).
 
 ## Scaling does not roll
 

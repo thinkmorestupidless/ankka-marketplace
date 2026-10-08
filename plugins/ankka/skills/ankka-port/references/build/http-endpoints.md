@@ -5,7 +5,8 @@
 Source: https://docs.ankka.cloud/build/http-endpoints/
 An HTTP endpoint is how the outside world reaches a service. It declares routes under a path prefix,
 turns each request into calls on components, and turns their replies into responses. Endpoints hold no
-state; the components behind them do.
+state; the components behind them do. A Scala service can also serve a `.proto` service definition, beside
+its HTTP endpoints or instead of them; see [gRPC endpoints](grpc-endpoints.md).
 
 Every endpoint declares an access control list (ACL) saying who may call it. A service is private to its
 cluster until it is exposed, but exposing it changes only who can reach the endpoint, never who is
@@ -21,7 +22,7 @@ whole endpoint, the same routes in each language:
 ```scala
 package shoppingcart.api
 
-import com.github.plokhotnyuk.jsoniter_scala.core.JsonValueCodec
+import com.github.plokhotnyuk.jsoniter_scala.core.{JsonValueCodec, writeToString}
 import com.thinkmorestupidless.ankka.core.{Codecs, EntityId}
 import com.thinkmorestupidless.ankka.http.*
 import com.thinkmorestupidless.ankka.sdk.ComponentClient
@@ -66,6 +67,17 @@ final class ShoppingCartEndpoint(client: ComponentClient) extends HttpEndpoint("
 
   delete("/{cartId}") { (cartId: String) =>
     cart(cartId).call(ShoppingCartEntity.discard).invoke()
+  }
+
+  // A socket: the client sends "refresh" and is sent the cart, for as long as it keeps the socket
+  // open. The handler is ordinary blocking code on a virtual thread; `receive()` answers `None`
+  // once the socket is closed, which ends the loop and the handler.
+  socket("/{cartId}/watch") { (cartId: String, socket: Socket) =>
+    Iterator.continually(socket.receive()).takeWhile(_.isDefined).flatten.foreach {
+      case "refresh" =>
+        socket.send(writeToString(cart(cartId).call(ShoppingCartEntity.getCart).invoke()))
+      case other => socket.send(s"""{"error":"unknown request '$other'; send refresh"}""")
+    }
   }
 
   private def cart(cartId: String) =
@@ -137,7 +149,7 @@ parameters than its template names fails the service at startup rather than on t
 matches it.
 
 A Python endpoint is a class with a `prefix`, an `acl` and decorated methods — `@get`, `@post`, `@put`,
-`@delete`, `@patch` and `@sse` — and a TypeScript one declares its routes in a `routes` object. In both,
+`@delete`, `@patch`, `@sse` and `@socket` — and a TypeScript one declares its routes in a `routes` object. In both,
 path parameters bind by name from the template, at most one further parameter is the body, and the
 declared reply type decides the response's encoding. A `GET` route cannot take a body. The constructor
 may take a component client, and the SDK passes one when it does.
@@ -156,6 +168,7 @@ declared, applies the ACL, opens the request's trace, and forwards each request 
 | `PATCH` | `patch(template) { … }` or `patchBody(template) { … }` | `patchBody` decodes one |
 | `GET`, as server-sent events | `sse(template) { … }` | none |
 | `POST`, as server-sent events | `sseBody(template) { … }` | one |
+| `GET`, opening a socket | `socket(template) { … }` | none; see [Sockets](#sockets) |
 
 A template is relative to the prefix and names its path parameters in braces: `"/{cartId}/items/{productId}"`.
 A handler takes up to two path parameters, in template order, followed by the body for the `…Body`
@@ -169,6 +182,112 @@ parse is a `400` naming the problem, before the handler runs.
 **Literal segments outrank parameters.** With both `/{cartId}` and `/awkward` declared, a request for
 `/awkward` goes to the literal route whatever order the two were declared in. Routes are matched most
 specific first, so a route like `/users/me` never depends on being declared before `/users/{id}`.
+
+## Sockets
+
+A socket route keeps a connection open in both directions. A request to it opens a **socket**: the
+client and the handler send each other **frames** — pieces of text — until one of them closes it. The
+handler runs for as long as the socket is open, on a virtual thread in Scala and as an async function
+in Python and TypeScript, so it is written as an ordinary loop: wait for a frame, answer it, call a
+component between frames.
+
+**Scala**
+
+```scala
+// A socket: the client sends "refresh" and is sent the cart, for as long as it keeps the socket
+// open. The handler is ordinary blocking code on a virtual thread; `receive()` answers `None`
+// once the socket is closed, which ends the loop and the handler.
+socket("/{cartId}/watch") { (cartId: String, socket: Socket) =>
+  Iterator.continually(socket.receive()).takeWhile(_.isDefined).flatten.foreach {
+    case "refresh" =>
+      socket.send(writeToString(cart(cartId).call(ShoppingCartEntity.getCart).invoke()))
+    case other => socket.send(s"""{"error":"unknown request '$other'; send refresh"}""")
+  }
+}
+```
+
+**Python**
+
+```python
+# A socket: the client sends "refresh" and is sent the cart, for as long as it keeps the socket
+# open. `async for` ends when the socket is closed, and so does the handler.
+@socket("/{cartId}/watch")
+async def watch(self, cartId: str, socket: Socket) -> None:
+    async for text in socket:
+        if text == "refresh":
+            cart = await self._cart(cartId).call("get-cart").invoke(reply=ShoppingCart)
+            await socket.send(default_codec_for(ShoppingCart).encode(cart).decode("utf-8"))
+        else:
+            await socket.send(json.dumps({"error": f"unknown request {text!r}; send refresh"}))
+```
+
+**TypeScript**
+
+```ts
+// A socket: the client sends "refresh" and is sent the cart, for as long as it keeps the socket open.
+// `for await` ends when the socket is closed, and so does the handler.
+watch: socket("/{cartId}/watch", async (ep: ShoppingCartEndpoint, req, socket) => {
+  for await (const text of socket) {
+    if (text === "refresh") {
+      const cart = await ep.cart(req.params.cartId).call(ShoppingCartEntity.handlers.getCart).invoke()
+      await socket.send(new TextDecoder().decode(defaultCodecFor(ShoppingCart).encode(cart)))
+    } else {
+      await socket.send(JSON.stringify({ error: `unknown request '${text}'; send refresh` }))
+    }
+  }
+}),
+```
+
+In Scala, `socket.receive()` waits for the next frame and answers `None` once the socket is closed,
+and `socket.send(text)` waits while the client is not reading and throws `SocketClosed` once it is
+closed. In Python and TypeScript the socket is an async iterator of frames, which ends when the socket
+is closed, and `send` is awaited. A handler that returns closes its socket; one that lets
+`SocketClosed` escape has ended the same way, as a handler does when its client goes.
+
+**The ACL is decided when the socket is opened.** The opening request is an ordinary request to the
+route: an ACL that refuses it answers exactly what it answers any request — `401` with the challenge,
+`403`, or `503` — no socket is opened and no handler runs. What it established — the caller, the
+principal — is what the handler reads for the socket's whole life, through the same `request`,
+`caller` and `principal` every handler uses, together with the opening request's path parameters,
+query and headers. The socket is not checked again: a token that expires while the socket is open
+leaves it open, so a service that must end a session at its token's expiry reads the principal's
+expiry and closes the socket itself. A plain `GET` to a socket route that does not ask to open a socket
+is answered `426`.
+
+**A browser sends its token as a subprotocol.** A browser cannot set `Authorization` on a socket, so
+an authenticated socket route also reads the token from a subprotocol the client offers,
+`ankka.bearer.<token>`, when the request has no `Authorization` header. Offer `ankka.socket` beside it;
+the platform selects that one and never echoes the token back:
+
+```js
+const socket = new WebSocket(`wss://${hostname}/carts/c1/watch`, ["ankka.socket", `ankka.bearer.${token}`])
+```
+
+Any other client sends the header as it would on any request.
+
+**A socket is closed, never cut off.** Its client is told why with a close code:
+
+| Close reason | Code | When |
+|---|---|---|
+| finished | 1000 | the handler returned |
+| going away | 1001 | the instance is stopping; open the socket again and another instance answers |
+| not text | 1003 | the client sent a frame that is not text |
+| unread | 1008 | more frames were waiting for the handler than a socket holds |
+| too large | 1009 | the client sent a frame larger than a frame may be |
+| failed | 1011 | the handler threw, or the process behind it stopped |
+
+A client's own close is answered with the client's code. The platform keeps a quiet socket open by
+pinging it, which neither side sees as a frame, so a socket nobody writes to for hours stays open
+through the gateway. The limits — how large a frame may be, how many frames may wait unread, how long
+a socket may be quiet before it is pinged — are in the [configuration reference](../reference/configuration.md).
+
+**The platform carries the socket and nothing else.** It keeps no frame and no record of who holds a
+socket open. Presence, fan-out to many sockets and anything a reconnecting client should catch up on
+are the service's own: a key value entity, a consumer, a view. A socket's whole life is one span in
+the service's traces, recorded when it closes, and the calls its handler makes are under it.
+
+A test opens a socket with `TestSocket` from the test kit, or in Python and TypeScript runs the
+handler against a scripted socket with the endpoint test kit's `socket`.
 
 ## Request and response bodies
 
@@ -317,9 +436,39 @@ final class GatedEndpoint extends HttpEndpoint("/gated"):
 | `AuthDecision.Forbidden(reason)` | `403`: logged in, and not allowed. |
 | `AuthDecision.Unavailable(reason)` | `503` with `Retry-After`: the check could not be made, for example because signing keys could not be fetched. |
 
-ankka does not ship a check for a specific identity provider for your services. To know which *user* a
-request is for, plug a verified token into `Authenticate`. To know which *workload* sent it, use
-`allowCallers`.
+To know which *user* a request is for, verify their token with `ankka-auth-oidc`, below. To know which
+*workload* sent it, use `allowCallers`.
+
+### Verify your users' tokens
+
+A service whose users sign in with an identity provider lists the issuers it accepts, and an endpoint
+admits a request only when it carries a token one of them signed. Add the module:
+
+```scala
+"com.thinkmorestupidless" %% "ankka-auth-oidc" % ankkaVersion
+```
+
+and declare the access rule with `Oidc.authenticate()`, which reads the issuers from the service's
+environment. The handler reads `principal`: the token's subject, name, email, roles, every other claim
+by name, and the issuer that verified it.
+
+```scala
+/** An endpoint whose users sign in with an identity provider the service lists. */
+final class AccountEndpoint(val acl: Acl = Oidc.authenticate()) extends HttpEndpoint("/account"):
+
+  get("/me")(() =>
+    s"${principal.subject} from ${principal.issuer.getOrElse("?")} " +
+      s"roles=${principal.roles.toList.sorted.mkString(",")} " +
+      s"tier=${principal.claims.getOrElse("tier", "")}"
+  )
+```
+
+A request with no token, or a token that is expired, for another audience, from an issuer the service
+does not list, or signed with a shared secret, is answered `401` with a challenge. A request that
+arrives when an issuer's keys cannot be fetched, and none are held, is answered `503`. The service
+fetches nothing when it starts. The issuers are a named set of `ANKKA_AUTH_` variables, described in
+[Identity and machine accounts](../platform/identity.md#a-services-own-users). A service that declares
+the rule and lists no issuer does not start, and says which variable to set.
 
 ### Name who may call
 
@@ -329,7 +478,7 @@ workload, so it cannot be forged by anything the request says about itself:
 
 | Caller | Admitted by |
 |---|---|
-| a request from outside the cluster, through the gateway | `Callers.internet` |
+| a request from outside the cluster, through the gateway, or under a mount of a web-hosted service of this project | `Callers.internet` |
 | the `orders` service in this service's project | `Callers.service("orders")` |
 | the `invoices` service in the `billing` project | `Callers.service("billing", "invoices")` |
 | any service in this service's project | `Callers.anyInProject` |
@@ -350,12 +499,7 @@ withAcl(Acl.allowCallers(Callers.self)) {
 A handler reads the caller as `caller`, which is always present:
 
 ```scala
-get("/whoami") { () =>
-  caller match
-    case Caller.Gateway                => "the internet, through the gateway"
-    case Caller.Service(project, name) => s"the $name service in project $project"
-    case Caller.Local                  => "this machine"
-}
+get("/whoami")(() => whoIsCalling)
 ```
 
 `caller` is set before any ACL runs, so an `AllowIf` predicate can read it too, and it is independent of
@@ -415,38 +559,11 @@ that does not, rather than disclosing which is which.
 
 ## Call another service
 
-`clients.services` calls another service's endpoints as this service. It is addressed by name: a service
-in this project by its name, one in another project by project and name.
-
-```scala
-// Calls `/callers/whoami` on another service in this project, as this service: the answer is
-// how that service saw this one.
-get("/call/{service}") { (service: String) =>
-  try services(service).getText("/callers/whoami")
-  catch case e: ServiceUnresolvable => throw HttpProblem(503, e.getMessage)
-}
-```
-
-In a cluster the call is mutual TLS: it presents this service's certificate, so the callee's
-`allowCallers` sees who is calling, and it accepts the callee only if its certificate names the service
-asked for — a workload holding another service's certificate fails the handshake before anything is sent.
-The address is the callee's Kubernetes Service and its port is read from DNS, so a descriptor that changes
-the port changes nothing here.
-
-Outside a cluster the same call reaches the named service on this machine over plain HTTP: the address
-set as `ankka.local-services.<name>` if there is one, otherwise the address the service announced to the
-local console.
-
-| Method | Answers |
-|---|---|
-| `get[R](path)`, `post[B, R](path, body)`, `put[B, R](path, body)` | the JSON body decoded as `R`; any status other than 2xx throws `ServiceCallFailed` |
-| `getText(path)` | the body as text, what a route returning a `String` sends |
-| `delete(path)` | nothing; any 2xx succeeds |
-| `request(method, path, body, contentType, headers)` | the `ServiceResponse`, whatever its status |
-
-`ServiceUnresolvable` means nothing was found under the name and nothing was sent; `ServiceIdentityMismatch`
-means the service reached is not the one asked for. There are no retries and no redirects: whether a call
-is safe to repeat is the caller's to know. Components reach the same clients as `service.services`.
+`clients.services` calls another service's endpoints as this service, by its name, so the service called
+reads this one as the caller and its access rule can admit it by name. The same client is given to a
+workflow's step, a consumer, a timed action and an agent, in Scala, Python and TypeScript.
+[Calling other services](calling-services.md) shows the call in each language, what it answers, the four
+errors it can end in, how long it waits, and how to test it.
 
 ## Registering endpoints
 
@@ -540,9 +657,14 @@ by the same rules, so a literal segment outranks a parameter.
 
 The Python ACL is a required class attribute: an endpoint that declares no `acl` raises `RegistrationError`
 when the class is defined, naming it. `Acl.ALLOW_ALL` admits any caller, `Acl.DENY_ALL` refuses everything,
-and `Acl.AUTHENTICATED` answers `503` for now, because the sidecar has no token verifier configured for a
-service's own routes. A route decorator takes an `acl` of its own, which replaces the endpoint's for that
-route exactly as `withAcl` does in Scala:
+and `Acl.AUTHENTICATED` admits a request carrying a token from one of the issuers the service lists. The
+runtime verifies the token before the process is asked anything, exactly as `Oidc.authenticate()` does in
+Scala, and hands the handler `self.request.principal` with the token's subject, roles, every other claim
+under `claims`, and the name of the issuer that verified it. TypeScript declares `Acl.authenticated` and
+Rust `Acl::Authenticated`, with the same principal. The issuers are the `ANKKA_AUTH_` named set described in
+[Identity and machine accounts](../platform/identity.md#a-services-own-users); a service that declares the
+rule and lists no issuer does not start, and its report names the route and the variable. A route decorator
+takes an `acl` of its own, which replaces the endpoint's for that route exactly as `withAcl` does in Scala:
 
 ```python
 class CartsEndpoint(Endpoint):
@@ -595,8 +717,8 @@ export class CallersEndpoint extends Endpoint {
 ```
 
 In Python `Callers.self_` carries a trailing underscore so it does not shadow `self`. A Python or TypeScript
-service can be called as described in [Name who may call](#name-who-may-call), but has no service client
-of its own yet: calling another service as itself is Scala-only.
+service calls another as itself through `services`, as
+[Calling other services](calling-services.md) describes.
 
 A `str` return value is answered as `text/plain`, and a `str` body is read as raw text, not as a JSON
 string — the same encoding the Scala SDK uses.

@@ -3,7 +3,7 @@
 > A compact map of the Scala SDK — the artifacts, and for every component kind its base class, companion, handler declarations, effect builders and in-handler accessors.
 
 Source: https://docs.ankka.cloud/reference/scala-sdk/
-The Scala SDK is six libraries, published to Maven Central under `com.thinkmorestupidless` for Scala 3 and
+The Scala SDK is seven libraries, published to Maven Central under `com.thinkmorestupidless` for Scala 3 and
 JDK 21. This page lists what each component kind is made of. The guides under Build show each one in use.
 
 ## Artifacts
@@ -14,10 +14,11 @@ JDK 21. This page lists what each component kind is made of. The guides under Bu
 | `ankka-sdk` | `com.thinkmorestupidless.ankka.sdk` | The component base classes and companions, `ChangeSource`, and `ComponentClient`. |
 | `ankka-runtime` | `com.thinkmorestupidless.ankka.runtime` | `Ankka.service`, `ProjectionRuntime`, `TimerRuntime`, `ViewClient` and SQL fragments. |
 | `ankka-http` | `com.thinkmorestupidless.ankka.http` | `HttpEndpoint`, `HttpServer`, `Acl` and the request context. |
+| `ankka-auth-oidc` | `com.thinkmorestupidless.ankka.auth.oidc` | `Oidc.authenticate`, the issuers a service lists, and the token verifier. Add it only when a service has users of its own to verify. |
 | `ankka-agent` | `com.thinkmorestupidless.ankka.agent` | `Agent`, `FunctionTool`, guardrails, session memory, `AgentRuntime` and model providers. |
 | `ankka-testkit` | `com.thinkmorestupidless.ankka.testkit` | Unit testkits, `AnkkaTestKit`, `TestTransport`. `TestModelProvider` is in `ankka-agent`. |
 
-A seventh library, `ankka-controlplane-api`, is published beside these for programs that call the
+An eighth library, `ankka-controlplane-api`, is published beside these for programs that call the
 control plane rather than run as a service. It holds the control plane's request and response types and
 the service descriptor's validation, and depends on `ankka-core` alone. See
 [Control plane HTTP API](control-plane-api.md#from-scala).
@@ -29,12 +30,15 @@ libraryDependencies ++= Seq(
   "com.thinkmorestupidless" %% "ankka-runtime" % ankkaVersion,
   "com.thinkmorestupidless" %% "ankka-http"    % ankkaVersion,
   "com.thinkmorestupidless" %% "ankka-agent"   % ankkaVersion,
+  "com.thinkmorestupidless" %% "ankka-telemetry-otlp" % ankkaVersion,
   "com.thinkmorestupidless" %% "ankka-testkit" % ankkaVersion % Test
 )
 ```
 
-`ankka-runtime` brings `ankka-sdk` and `ankka-core` with it. A service created from the template already
-has these lines.
+`ankka-runtime` brings `ankka-sdk` and `ankka-core` with it. `ankka-telemetry-otlp` is the only line a
+service needs to export its traces and metrics to the collector the installation names; nothing in its
+code names it, and with no collector named it starts nothing (see [Telemetry](../operate/telemetry.md)).
+A service created from the template already has these lines.
 
 ## The shape every component shares
 
@@ -96,7 +100,7 @@ See [Key value entities](../build/key-value-entities.md).
 |---|---|
 | Base class | `View[Src, Row]` |
 | Companion | `View.Companion[V, Src, Row](componentId, source, rowSerializer)` |
-| Source | `ChangeSource.eventsOf(EntityCompanion)`, `ChangeSource.stateOf(KeyValueCompanion)`, `ChangeSource.fromTopic(name, serializer)` |
+| Source | `ChangeSource.eventsOf(EntityCompanion)`, `ChangeSource.stateOf(KeyValueCompanion)`, `ChangeSource.fromTopic(name, serializer)`, or `fromTopic(name, serializer, startFrom, TopicOptions(contract, broker, parallel))` |
 | Must define | `onChange(change: Src): Effect`, `create(ctx: ViewComponentContext)` |
 | May override | `onDelete: Effect` (default: delete the row), `parallelism` (default 4) |
 | In a handler | `rowState: Option[Row]`, `updateContext` (`subject`, `sequenceNumber`, `localOrigin`) |
@@ -114,7 +118,7 @@ fragments over the row's JSON, built with `jsonText("field") ++ sql" = $value"` 
 | Base class | `Consumer[Src, Out]` |
 | Companion | `Consumer.Companion[C, Src, Out](componentId, source)` |
 | Must define | `onMessage(message: Src): Effect`, `create(ctx: ConsumerContext)` |
-| May override | `onDelete: Effect` (default: ignore), `produceTo: Option[String]`, `outputSerializer: Option[Serializer[Out]]`, `parallelism` (default 4) |
+| May override | `onDelete: Effect` (default: ignore), `produceTo: Option[String]` or `produces: Option[Publication]` (a topic with its contract and broker), `outputSerializer: Option[Serializer[Out]]`, `parallelism` (default 4) |
 | In a handler | `messageContext` (`subject`, `sequenceNumber`, `localOrigin`); the context's `componentClient` |
 | Effects | `effects.produce(out)`, `effects.produce(out, metadata)`, `effects.produceAll(messages)`, `effects.done()`, `effects.ignore()` |
 | One of several messages | `effects.message(out)`, then `.withKey(key)` to publish it under a record key other than its subject and `.withMetadata(metadata)` for its headers |
@@ -180,11 +184,13 @@ See [Workflows](../build/workflows.md).
 | Companion | `TimedAction.Companion[A](componentId)` |
 | Must define | `create(ctx: TimedActionContext)` |
 | Handlers | `handler(name)(_.method)`, with one argument or none |
-| In a handler | `timerContext` (`timerName`, `previousAttempts`, `componentClient`) |
+| In a handler | `timerContext` (`timerName`, `previousAttempts`, `dueTime`, `componentClient`) |
 | Effects | `effects.done()`, `effects.error(msg)`, `effects.error(msg, code)` |
-| Scheduling | `TimerRuntime().timerScheduler`: `createSingleTimer(name, delay, handle.deferred(input))`, `delete(name)`, `exists(name)` |
+| Scheduling | `TimerRuntime().timerScheduler`: `createSingleTimer(name, delay, handle.deferred(input))`, `createRecurringTimer(name, delay, period, handle.deferred(input))`, `delete(name)`, `exists(name)` |
+| Testing | `TimerProbe()` as `TimerRuntime(pollInterval, observer = probe)`: `fired(name)`, `dueTimes(name)`, and `scheduled(name)` once `probe.bind(testKit)` |
 
-Scheduling twice under one name replaces the earlier timer. See [Timers](../build/timers.md).
+Scheduling twice under one name replaces the earlier timer, except that a recurring timer set again for
+the same handler with the same period keeps its next due time. See [Timers](../build/timers.md).
 
 ## Agent
 
@@ -193,15 +199,17 @@ Scheduling twice under one name replaces the earlier timer. See [Timers](../buil
 | Base class | `Agent` |
 | Companion | `Agent.Companion[A](componentId)` |
 | Must define | `create(ctx: AgentContext)` |
-| May override | `role` (default: the component id), `maxToolCallSteps` (default 100) |
+| May override | `role` (default: the component id), `maxToolCallSteps` (default 100), on the companion `mcpServers` and `resultGuardrails` |
 | Handlers | `command(name)(_.method)`, `stream(name)(_.method)` |
-| In a handler | `sessionId`, `componentClient`, `sessionContext` |
+| In a handler | `sessionId`, `componentClient`, `sessionContext`, `services`, `secrets` |
 | Effects | `effects.systemMessage(t)`, `.userMessage(t)`, `.withContext(t)`, `.model(p)`, `.memory(m)`, `.tools(t*)`, `.guardrails(g*)`, then `.thenReply()`, `.thenReplyAs[T]`, `.thenStream()`; `effects.error(msg, code)` |
-| Tools | `FunctionTool.named(n).describedAs(d).param[T](name, description)….handle { … }` |
+| Tools | `FunctionTool.named(n).describedAs(d).param[T](name, description)….handle { … }`, then `.requiresApproval` or `.requiresApproval(within)` |
+| MCP servers | `McpServer.named(n)`, `McpServer.at(n, url)`, `McpServer.service(n, service, path)`, `McpServer.service(n, project, service, path)`, then `.header(name, "ANKKA_MCP_…")`, `.requiresApproval`, `.requiresApproval(within)` |
 | Guardrails | `Guardrail.maxInputLength(n)`, `Guardrail.forbidding(name, regex)`, or implement `checkInput` / `checkOutput` |
 | Memory | `MemoryProvider.none`, `MemoryProvider.limitedWindow`, `.readLast(n)`, `.readOnly`, `.writeOnly`, `.filtered(MemoryFilter…)` |
 | Runtime | `AgentRuntime.withDefaultModel(provider)`, `.withCompaction(CompactionSettings(…))`, `.descriptors` |
-| Calling | `componentClient.forAgent(SessionId(id)).call(Companion.handler).invoke(input)`, `.stream(Companion.handler)(input)` |
+| Calling | `componentClient.forAgent(SessionId(id)).call(Companion.handler).invoke(input)`, `.stream(Companion.handler)(input)`; `.ask(Companion.handler).invoke(input)` → `AgentOutcome.Answered(value)` or `AgentOutcome.AwaitingApproval(requests)`; `.decide(Companion.handler)(Decision.approved(id, by) \| Decision.refused(id, by, note))`; `.streamParts(Companion.handler)(input)`; `call` and `stream` throw `ApprovalAwaited` |
+| Testing MCP | `TestMcpServer().tool(name, description)(args => text)`, `.url`, `.calls`, `.requireHeader(…)`, `.failNext(…)`; `AgentRuntime.withVariables(map.get)` |
 | Models | `AnthropicProvider.fromEnv(model)`, `TestModelProvider()` |
 
 See [Agents](../build/agents.md), [Streaming responses](../build/streaming.md) and
@@ -231,11 +239,11 @@ See [Judgments](../build/judgments.md).
 | Result schema | `given JsonSchema[R] = JsonSchema.derived` for a case class |
 | Base class | `AutonomousAgent(context)`; override `tools: Seq[FunctionTool]` |
 | Companion | `AutonomousAgent.Companion[A](componentId)`; define `create(context)` and `definition` |
-| Definition | `define.describedAs(d).instructions(t).guardrails(g*).model(p).capability(TaskAcceptance.of(task).maxIterationsPerTask(n)).settings(AutonomousAgentSettings(…))` |
+| Definition | `define.describedAs(d).instructions(t).guardrails(g*).model(p).mcpServers(s*).resultGuardrails(g*).capability(TaskAcceptance.of(task).maxIterationsPerTask(n)).settings(AutonomousAgentSettings(…))` |
 | In a tool | `context.componentClient`, `context.instanceId`, `AutonomousAgent.currentTask` |
 | Tasks | `componentClient.tasks.create(task, instructions).withId(id).attach(…).attachReference(…).dependsOn(ids*).create()` |
 | A task | `componentClient.forTask(id).get()`, `.get(task)`, `.await(task, timeout)`, `.cancel(reason)` |
-| An instance | `componentClient.forAutonomousAgent(Companion)(instanceId).assign(ids*)`, `.suspend()`, `.resume()`, `.terminate()`, `.state()`, `.notifications()` |
+| An instance | `componentClient.forAutonomousAgent(Companion)(instanceId).assign(ids*)`, `.suspend()`, `.resume()`, `.terminate()`, `.state()` (with `awaiting`), `.notifications()`, `.decide(decision)` |
 | One task | `componentClient.forAutonomousAgent(Companion).runSingleTask(task, instructions)` |
 | Runtime | the `AgentRuntime` hosts them; register `AgentRuntime.descriptors` and a `ProjectionRuntime()` |
 | Testing | `TestModelProvider().expectCompleteTask(result)`, `.expectCompleteTaskJson(json)`, `.expectCompleteTaskText(t)`, `.expectFailTask(reason)`, `.whenToolResult(s)(r)`, `.whenUserAsks(s)(r)`; `AnkkaTestKit.awaitTask(id, task)` |
@@ -248,10 +256,12 @@ See [Autonomous agents](../build/autonomous-agents.md).
 |---|---|
 | Base class | `HttpEndpoint(prefix)` |
 | Must define | `acl: Acl` |
-| Routes | `get`, `post`, `put`, `patch`, `delete` with path parameters only; `postBody`, `putBody`, `patchBody` with a body as the last argument; `sse` and `sseBody` for server-sent events |
+| Routes | `get`, `post`, `put`, `patch`, `delete` with path parameters only; `postBody`, `putBody`, `patchBody` with a body as the last argument; `sse` and `sseBody` for server-sent events; `socket` for a socket route, whose handler takes the path parameters and a `Socket` |
+| A socket | `socket.receive(): Option[String]`, `None` once closed; `socket.send(text)`, which throws `SocketClosed` once closed; `CloseReason` names the close codes |
+| Testing a socket | `testKit.socket(path, headers, subprotocols)` or `TestSocket.open(url, …)`: `send`, `receive`, `close`, `closed()` (the code and reason; fails for a socket cut off), `subprotocol` |
 | In a handler | `request` (`header`, `query`, `caller`), `query` (`required`, `optional`, `all`, `flag`), `principal`, `caller` (`Caller.Gateway`, `Caller.Service(project, name)`, `Caller.Local`) |
 | ACLs | `Acl.DenyAll`, `Acl.AllowAll`, `Acl.AllowIf(ctx => …)`, `Acl.Authenticate(ctx => AuthDecision…)`, `Acl.allowCallers(Callers.internet, Callers.service("orders"), Callers.service(project, name), Callers.anyInProject, Callers.self)` |
-| Other services | `clients.services(name)` or `clients.services(project, name)`: `get[R]`, `getText`, `post[B, R]`, `put[B, R]`, `delete`, `request` |
+| Other services | `clients.services(name)` or `clients.services(project, name)`: `get[R]`, `getText`, `post[B, R]`, `put[B, R]`, `delete`, `request`; the same `services` on a workflow's, a consumer's, a timed action's and an agent's context. Errors `ServiceUnresolvable`, `ServiceIdentityMismatch`, `ServiceUnanswered`, `ServiceCallFailed` ([Calling other services](../build/calling-services.md)) |
 | Testing a caller | `testKit.asCaller(caller)` gives the header that makes a request arrive as that caller |
 | Errors | throw `HttpProblem(status, message)` or `HttpProblem.badRequest`, `unauthorized`, `forbidden`, `notFound`, `conflict` |
 | Serving | `HttpServer.of(clients => Endpoint(clients.componentClient))`, `HttpServer.at(interface, port)(…)` |
@@ -302,7 +312,7 @@ val service = Ankka.service
 | `ConsumerTestKit.of(Companion, client)` | One consumer, no runtime. `onMessage(message, subject, sequenceNumber)` and `onDelete(subject, sequenceNumber)` return the effect and the `messages` it publishes: `payload`, the record `key` a broker is given, `metadata`, `text`. |
 | `ConsumerTestKit.graph(Companion, client)` | One graph consumer, no runtime. The same two calls return the `GraphDelta`s published, read back from their bytes; `records` gives the same consumer as messages. |
 | `TestTransport` | A `ComponentClient` whose calls are stubbed, for testing a component that calls others. |
-| `AnkkaTestKit.start(descriptors…)` | The whole service against a throwaway Postgres. `restartService()` drops every entity from memory. |
+| `AnkkaTestKit.start(descriptors…)` | The whole service against a throwaway database of its own, in one Postgres container that every kit in the test JVM shares. `restartService()` drops every entity from memory. |
 | `TestModelProvider` | A scripted model that fails when its script runs out. |
 
 See [Testing](../build/testing.md).

@@ -31,7 +31,8 @@ the runtime makes it happen.
 Because the process holds no durable state, it can be restarted, redeployed or crash without losing
 anything. An entity whose process is briefly unavailable is re-opened when the process returns; callers
 waiting at that moment are told the service is unavailable and the component client retries such a
-refusal briefly, so a rolling replacement refuses nothing.
+refusal briefly. A query lost while its entity moves to another instance is sent again; a command is
+not, and can time out during a rollout (see [Limitations](../reference/limitations.md#platform)).
 
 ## The protocol
 
@@ -71,7 +72,7 @@ samples use the stored spelling.
 A descriptor says a service is process-hosted in two fields:
 
 ```json title="service.json"
-{ "name": "cart", "service": { "image": "my-cart:1.0.0", "hosting": "process", "protocol": "1.3" } }
+{ "name": "cart", "service": { "image": "my-cart:1.0.0", "hosting": "process", "protocol": "1.4" } }
 ```
 
 The image holds only your process. The platform adds the sidecar, at the version that matches the
@@ -106,8 +107,9 @@ The Rust SDK builds services this way. See [WebAssembly ABI](../reference/wasm-a
   ```
 
 - **A module reaches nothing but the runtime.** It has no network, no file system and no clock of its
-  own: it calls other components, queries views and sets timers through the runtime, reads the time the
-  runtime hands it, and reads its configuration through a `config` call that answers the descriptor's
+  own: it calls other components, queries views and sets timers through the runtime, calls other services
+  through it from the handlers that may wait, asks it for the time and for random bytes, and reads its
+  configuration through a `config` call that answers the descriptor's
   variables and withholds the platform's own — a model key, the database's credentials, the cluster's
   settings. Because one container has one environment, that withholding happens when the module asks,
   not when the pod is rendered.
@@ -116,6 +118,10 @@ The Rust SDK builds services this way. See [WebAssembly ABI](../reference/wasm-a
   loaded, and keeps it until the runtime unloads it, which saves decoding the state on every command.
   Either way the runtime holds the encoded state too, so a module that faults loses nothing: the call
   that faulted fails, and the next one starts from the state the runtime holds.
+- **A module learns which protocol its runtime speaks.** Discovery hands it the runtime's protocol
+  version, and a module that declares something an older runtime would ignore — where a topic source
+  starts, or its version — refuses to start there rather than be hosted wrong. Run a runtime image that
+  speaks at least the protocol the crate does.
 - **What it costs, and what it saves.** A command handled by a module skips the round trip to a process
   entirely, and there is no second container to size or restart. In exchange a running call cannot be
   interrupted — a call that exceeds the runtime's timeout is abandoned and its instance replaced — a

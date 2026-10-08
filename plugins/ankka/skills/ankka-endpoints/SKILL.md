@@ -1,6 +1,6 @@
 ---
 name: ankka-endpoints
-description: Write, change or test an ankka HTTP endpoint in Scala, Python, TypeScript or Rust — routes and path templates, typed path parameters and bodies, response encoding, error codes and HttpProblem, query parameters and headers from the request, the ACL (DenyAll, AllowAll, AllowIf, Authenticate), server-sent events, and calling entities, workflows, agents and views from a handler. Use when the task names an endpoint, a route, a REST API, an ACL, authentication of callers, a 4xx status, SSE, HttpServer, or EndpointClients.
+description: Write, change or test an ankka HTTP endpoint in Scala, Python, TypeScript or Rust, or a gRPC endpoint in Scala — routes and path templates, typed path parameters and bodies, response encoding, error codes and HttpProblem, query parameters and headers from the request, the ACL (DenyAll, AllowAll, AllowIf, Authenticate), server-sent events, .proto service definitions, gRPC streams and statuses, reflection, and calling entities, workflows, agents, views and other services from a handler. Use when the task names an endpoint, a route, a REST API, gRPC, a .proto file, an ACL, authentication of callers, a 4xx status or gRPC status, SSE, HttpServer, GrpcServer, GrpcClients, or EndpointClients.
 ---
 
 # ankka HTTP endpoints
@@ -95,6 +95,13 @@ each acceptance scenario as one integration test through its route (`references/
 - A `POST` whose `String` body was expected as a JSON string, or a client calling `.json()` on a
   `text/plain` reply.
 
+## Calling another service
+
+A handler calls another service as this service through `services` (`clients.services` in Scala), by
+name, so that service's ACL can admit this one by name. It is the same client every component but an
+entity and a view has. What it answers, its four errors and how to test it are in
+`references/build/calling-services.md`.
+
 ## Reference files
 
 Open the one a task needs; each is one topic and stands alone.
@@ -105,9 +112,11 @@ Open the one a task needs; each is one topic and stands alone.
 
 ### Build
 
-- `references/build/views.md` — Build a queryable projection of an entity's or a topic's changes, keep one row per source id, and query the rows with SQL in Scala or by key in Python and TypeScript.
+- `references/build/views.md` — Build a queryable projection of entities' or a topic's changes, one row per source id or rows named by key from several sources, with declared and recursive queries, rebuilt by raising its version.
 - `references/build/streaming.md` — Stream an agent's reply token by token to a caller and over HTTP as server-sent events, and know what streaming changes about guardrails and sessions.
 - `references/build/http-endpoints.md` — Expose a service over HTTP — routes, typed path parameters and bodies, responses, errors, query parameters and headers, access control and server-sent events — in Scala, Python or TypeScript.
+- `references/build/calling-services.md` — Call another service's routes as your own service — from an endpoint, a workflow step, a consumer, a timed action or an agent's tool, in Scala, Python, TypeScript or Rust — so that service's access rules can admit yours by name.
+- `references/build/grpc-endpoints.md` — Serve a .proto service definition from a Scala service — every kind of method, access control, statuses, streams, reflection, calling another service's gRPC endpoint, and testing it.
 - `references/build/component-client.md` — Call entities, workflows and agents through the component client — blocking or asynchronous, with typed refusals and timeouts — and query views through the view client.
 - `references/build/testing.md` — Test ankka components at two levels in Scala, Python, TypeScript and Rust, with unit test kits that run one component and nothing else, integration test kits that run the whole service against a real database, and scripted models.
 

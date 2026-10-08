@@ -35,7 +35,7 @@ skill holds what differs.
    "shopping-cart", "c1").call("add-item").invoke(item, reply=Done)`; `for_key_value_entity`,
    `for_workflow`, `for_agent(...).call(name).stream(input)`, `views.get(view_id, key, Row)`,
    `views.all(view_id, Row)`, `timers.schedule(timer_id, delay, component_id, name, input)`,
-   `timers.cancel`. A refusal raises `ankka.client.CommandError` with `error.code`. The client comes as a
+   `timers.schedule_recurring(timer_id, delay, period, component_id, name, input)`, `timers.cancel`. A refusal raises `ankka.client.CommandError` with `error.code`. The client comes as a
    constructor argument in an endpoint, `self.context.client` in a step, `self.client` elsewhere.
 5. **Pass the request's metadata on.** In an endpoint, `self.client.with_metadata(self.request.metadata)`
    makes the handler's calls children of the request's trace. `self.request` has `query_param`,
@@ -98,6 +98,11 @@ See `references/get-started/first-service-python.md` for the first service and
 - Expecting ankka to create the delta topic or make it compacted. Declare it in the ankka-flow pipeline
   that reads it, and deploy that pipeline first.
 
+## Calling another service
+
+`self.services("name")` calls another service as this one, through the sidecar, which holds the
+certificate; an entity and a view have none. See `references/build/calling-services.md`.
+
 ## Reference files
 
 Open the one a task needs; each is one topic and stands alone.
@@ -113,6 +118,7 @@ Open the one a task needs; each is one topic and stands alone.
 ### Build
 
 - `references/build/autonomous-agents.md` — Write an autonomous agent in Scala or Python — a task type with a typed result and rules, an agent that accepts it, running and reading tasks, watching an instance over server-sent events, and testing with a scripted model.
+- `references/build/calling-services.md` — Call another service's routes as your own service — from an endpoint, a workflow step, a consumer, a timed action or an agent's tool, in Scala, Python, TypeScript or Rust — so that service's access rules can admit yours by name.
 - `references/build/graph.md` — Publish a service's entities as nodes and edges with a graph consumer, which writes versioned graph deltas to a topic for a graph database to follow, with no key, version or JSON written by hand.
 - `references/build/serialization.md` — How ankka encodes state, events, arguments and messages as JSON under a named manifest, what the JSON looks like in every language, and how to change a stored type without breaking a journal.
 - `references/build/testing.md` — Test ankka components at two levels in Scala, Python, TypeScript and Rust, with unit test kits that run one component and nothing else, integration test kits that run the whole service against a real database, and scripted models.

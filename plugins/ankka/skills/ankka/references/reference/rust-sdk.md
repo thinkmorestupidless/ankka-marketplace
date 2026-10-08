@@ -34,8 +34,10 @@ The release profile should set `panic = "abort"`: a panic is a trap the runtime 
 module has any use for.
 
 A module has no network, no file system and no clock of its own. `std::net`, `std::fs`, `std::env` and
-`SystemTime::now` do nothing useful in one; the runtime is reached through the context's client, the time
-through `ctx.now()`, and configuration through [`config`](#configuration).
+`SystemTime::now` do nothing useful in one. Everything is asked of the runtime: other components through
+the context's client, [other services](#calling-other-services) through `ctx.services()`,
+[the time and random bytes](#the-time-and-random-bytes) through `ctx.now()` and `ctx.random()`, and
+configuration through [`config`](#configuration).
 
 ## Codec and types
 
@@ -121,11 +123,23 @@ See [Key value entities](../build/key-value-entities.md).
 |---|---|
 | Trait | `View` |
 | Associated items | `type Row`, `type Event`, `COMPONENT_ID`; optionally `ROW_MANIFEST` |
-| Must define | `source() -> Source` (`Source::of(ShoppingCart)` or `Source::topic("name")`), `on_event(row, event, ctx) -> ViewEffect<Row>` |
-| May define | `on_deleted(row, ctx)`, which deletes the row by default; `queries()`, `["get", "all"]` by default |
+| Must define | `source() -> Source` (`Source::of(ShoppingCart)`, or `Source::topic("name")` with `.start_from(..)`, `.contract(..)`, `.broker(..)`, `.parallel()`), `on_event(row, event, ctx) -> ViewEffect<Row>` |
+| May define | `on_deleted(row, ctx)`, which deletes the row by default; `queries()`, `["get", "all"]` by default; `declared()`, the view's declared queries (`query(name, statement)`); `version()` |
 | In a handler | `row` is the current row or `None`; `ctx.metadata().subject()` is the source's id |
 | Effects | `view::update_row(row)`, `view::delete_row()`, `view::ignore()` |
-| Querying | `ctx.client().query(CartRows, "by-id", key)`, `query(CartRows, "all", ())`, or `query_by_name(view_id, name, key)` |
+| Querying | `ctx.client().query(CartRows, "by-id", key)`, `query(CartRows, "all", ())`, `query_by_name(view_id, name, key)`, or a declared query with `ask(view, name, values)` / `ask_by_name(view_id, name, values, limit)` |
+| Table name | `table_of(id)`, for a statement to name |
+
+## Keyed view
+
+| Part | API |
+|---|---|
+| Trait | `KeyedView` |
+| Must define | `type Row`, `COMPONENT_ID`, `sources() -> Sources<Self>` (`Sources::new().on::<E>(Source::of(...), handler)`) |
+| May define | `declared()`, `version()` |
+| In a handler | `fn(event, ctx) -> KeyedViewEffect<Row>`; `ctx.rows().get(key)`, `ctx.rows().ask(name, values)` |
+| Effects | `update_row(key, row)`, `delete_row(key)`, `update_rows(...)`, `delete_rows(keys)`, `ignore()`, `and(...)` |
+| Testing | `KeyedViewTestKit::<C>::new()` |
 
 See [Views](../build/views.md).
 
@@ -136,7 +150,7 @@ See [Views](../build/views.md).
 | Trait | `Consumer` |
 | Associated items | `type Message`, `COMPONENT_ID` |
 | Must define | `source() -> Source`, `on_message(message, ctx) -> ConsumerEffect` |
-| May define | `on_deleted(ctx)`, which ignores by default; `produces_to() -> Option<&str>`, a topic to publish to |
+| May define | `on_deleted(ctx)`, which ignores by default; `produces_to() -> Option<&str>`, a topic to publish to, or `produces() -> Option<Publication>` (`Publication::to(topic).contract(..).broker(..)`) |
 | In a handler | `ctx.entity_id()`, the source entity's id; `ctx.sequence()`, the change's sequence number; `ctx.client()` |
 | Effects | `consumer::produce(value)`, `consumer::produce_with(value, metadata)`, `consumer::produce_all(messages)`, `consumer::done()`, `consumer::ignore()` |
 | One of several messages | `consumer::message(value)`, then `.key(key)` to publish it under a record key other than its subject and `.metadata(metadata)` for its headers; `Outgoing::of(payload)` takes a payload already encoded |
@@ -199,10 +213,12 @@ of its own, so a step waiting on another component holds nothing a command needs
 | Associated items | `COMPONENT_ID` |
 | Must define | `actions() -> Actions<Self>` |
 | Declarations | `Actions::new().action(name, f)`, `f: fn(Input, &Context) -> Result<(), CommandError>` |
-| In a handler | `ctx.metadata()` carries `ankka.timer` and `ankka.attempts` |
-| Scheduling | `ctx.client().schedule(timer_id, Duration::of_seconds(30), Reminder, None, "remind", input)`, or `schedule_by_name(...)`; `ctx.client().cancel(timer_id)` |
+| In a handler | `ctx.metadata()` carries `ankka.timer`, `ankka.attempts` and `ankka.due`; `ctx.due()` is the due time the run is for |
+| Scheduling | `ctx.client().schedule(timer_id, Duration::of_seconds(30), Reminder, None, "remind", input)`, or `schedule_by_name(...)`; `ctx.client().schedule_recurring(timer_id, delay, period, Cleanup, "sweep", input)`, or `schedule_recurring_by_name(...)`; `ctx.client().cancel(timer_id)` |
 
-Scheduling twice under one id replaces the earlier timer, and an `Err` is retried on the runtime's schedule.
+Scheduling twice under one id replaces the earlier timer, except that a recurring timer set again for
+the same handler with the same period keeps its next due time; a handler's `Err` is retried on the
+runtime's schedule. A refused period is an `Err` from `schedule_recurring`, not a trap.
 See [Timers](../build/timers.md).
 
 ## Agent
@@ -371,7 +387,7 @@ asks for. `with_service(build())` answers their calls to the service's entities 
 | Declarations | `Routes::new().get(template, f)`, `.delete(template, f)`, `.post(template, f)`, `.put(...)`, `.patch(...)`; `.with_acl(acl)` after a route replaces the endpoint's for it |
 | Handlers | `get` and `delete`: `fn(&Request) -> Result<R, HttpProblem>`; `post`, `put`, `patch`: `fn(&Request, Body)`, the body decoded as `Body`, `()` for none. `R` is any serializable value or a `Response`; `Done` and `()` answer 204 |
 | Callers | `CallerMatcher::Internet`, `CallerMatcher::service(name)`, `CallerMatcher::Service { name, project }`, `CallerMatcher::AnyInProject`, `CallerMatcher::SelfService` |
-| In a handler | `request.path(name)`, `query(name)`, `header(name)`, `body_as::<T>()`, `principal()`, `caller()` (`Caller::Gateway`, `Caller::Service { project, name }` or `Caller::Local`), `metadata()`, `client()` |
+| In a handler | `request.path(name)`, `query(name)`, `header(name)`, `body_as::<T>()`, `principal()` (`subject`, `name`, `email`, `email_verified`, `roles`, `claims`, `issuer`), `caller()` (`Caller::Gateway`, `Caller::Service { project, name }` or `Caller::Local`), `metadata()`, `client()` |
 | Responses | `Response::json(v)`, `text(s)`, `html(s)`, `bytes(content_type, b)`, `redirect(location)`, `no_content()`, then `.status(n)`, `.header(name, value)` |
 | Errors | `HttpProblem::new(status, message)`; a `CommandError` from a call becomes its code's status with `?` |
 
@@ -395,7 +411,7 @@ let answer: String = ctx.client().invoke_by_name(Kind::Agent, "assistant", sessi
 | `invoke_by_name(kind, component_id, entity_id, name, input)` | the same, for a component this service does not declare |
 | `invoke_stream(...)` | a streaming handler's tokens, delivered whole once the stream ends |
 | `query(View, name, key)`, `query_by_name(...)` | a view's rows |
-| `schedule(...)`, `cancel(timer_id)` | timers |
+| `schedule(...)`, `schedule_recurring(...)`, `cancel(timer_id)` | timers; `schedule_recurring` since protocol 1.12 |
 
 A call blocks the handler until the runtime answers; a refusal is an `Err(CommandError)` whose `code` is the
 refusal's. Inside a handler `ctx.client()` carries the request's trace, so the call is a child span. See
@@ -425,6 +441,102 @@ Service::new("cart").register_as(ShoppingCart, Shape::Stateful)
 
 The runtime holds the state in both shapes, so a module that faults loses nothing. Choose stateful for a
 state that is large or costly to decode; stateless otherwise.
+
+## Secret store
+
+The service's secret store, for a value it must keep and never record, such as a credential a person
+gave it ([Secrets a service keeps](../build/secrets.md)). `ctx.secrets()` answers `Some(Secrets)` in an
+endpoint, a consumer, a timed action, an agent, an autonomous agent's tools and a workflow step, and
+`None` in an entity, a view and a workflow's command handler. `put(name, value)`, `get(name)` (an
+`Option<String>`) and `delete(name)` each return a `Result` whose error is the runtime's `CommandError`.
+
+The runtime holds the store and its key; a module never sees the key, and `config("ANKKA_SECRET_KEY")` is
+`None`. The three imports, `get_secret`, `put_secret` and `delete_secret`, are reached through a function
+of their own, so a module that never keeps a secret imports none of them and runs on a runtime from before
+protocol 1.4. Natively, a unit test talks to an in-memory store that applies the runtime's rules, unless a
+`NativeHost` answers. The integration test kit sets a generated `ANKKA_SECRET_KEY` on the runtime it
+starts.
+
+## Calling other services
+
+A handler calls a route of another service by that service's name, and the runtime makes the call as this
+service, so the other service's access rules can admit it by name
+([Calling other services](../build/calling-services.md)). `ctx.services()` answers `Some(Services)` in an
+endpoint's route, a workflow's step, a consumer, a timed action, an agent's handler, tool and guardrail,
+and an autonomous agent's task rule. It answers `None` in an entity, a view and a workflow's command
+handler: a call to another service waits for as long as that service takes, and a command that waited
+would hold every other command to the same entity behind it.
+
+```rust
+// A consumer may call another service; an entity's context answers `None` here. The call
+// is made by the runtime as this service, so the other service's ACL can admit it by name.
+let services = ctx.services().expect("a consumer may call another service");
+let answer =
+    match services
+        .service(&service)
+        .request("GET", &path, RequestOptions::default())
+    {
+        // Whatever the service answered, a refusal included: its status and its body.
+        Ok(response) => Answer {
+            status: i32::from(response.status),
+            body: String::from_utf8_lossy(&response.body).into_owned(),
+        },
+        // No answer came: the service was not found, was not the one named, or did not
+        // answer in time. What that means here is the handler's to decide.
+        Err(error) => Answer {
+            status: 0,
+            body: error.to_string(),
+        },
+    };
+```
+
+`services.service(name)` is a service of the same project and `service_in(project, name)` one of another.
+A `ServiceClient` has `get`, `post` and `put`, which send and read JSON through the crate's codec,
+`get_text`, `delete`, and the raw `request(method, path, RequestOptions)`, which answers a
+`ServiceResponse` — status, content type, body and headers — for every status. `with_headers` adds headers
+to every call a client makes. Every call blocks the handler until the service answers.
+
+A call fails with a `ServiceError`:
+
+| Error | When | Was anything sent |
+|---|---|---|
+| `Unresolvable { service, reason }` | no such service was found | no |
+| `IdentityMismatch { service, detail }` | what answers for the name is not the service asked for | no |
+| `Unanswered { service, reason }` | the connection was refused or broke, or no answer came in time | perhaps |
+| `CallFailed { service, status, body }` | the service answered with a status outside 2xx, to a typed helper | yes, and it answered |
+| `Refused(CommandError)` | the runtime refused the request, or the crate did: a body over 4,000,000 bytes, an answer that does not decode | no |
+
+A `ServiceError` converts into a `CommandError`, so `?` works in a handler that answers one.
+
+**The rule about where a call may be made is the runtime's, not the crate's.** `ctx.services()` being
+`None` is the earlier answer, with the better message. A command that reaches the client some other way is
+stopped by the runtime: the call does not return, the command is answered with a fault naming the import
+and the command, and the entity keeps the state it had.
+
+A module that never calls another service imports nothing for it. One that does needs a runtime that
+speaks protocol 1.10, and an earlier runtime refuses the module at start, naming the import `request`.
+
+In a unit test, `ScriptedServices` plays the other services: `answer(name, |request| …)` says what a
+service answers, `unresolvable`, `unanswered` and `mismatch` make a call fail in each way, `requests()` is
+every request made, and `run(|| …)` runs the code under test with them in place. A call to a service with
+no script fails the test, naming the service.
+
+## The time and random bytes
+
+`ctx.now()` is the runtime's clock, read when it is called, from any handler. Two reads in one handler may
+differ, so a handler that needs one time reads it once. When an event is applied again the time is still
+the present: an event's time belongs in the event.
+
+`ctx.random(&mut buf)` fills a buffer of any length with random bytes from the runtime's secure source,
+from any handler. An id made from them in a command belongs in the event the command persists, because
+applying the event again does not run the command again.
+
+Natively there is no runtime: `now()` is the machine's clock and `random` the system's source. A unit test
+fixes either with the test kit's `with_clock(instant, || …)` and `with_random(&bytes, || …)`.
+
+A module that reads the time or asks for random bytes imports `now` or `random`, and needs a runtime that
+speaks protocol 1.10; an earlier runtime refuses the module at start, naming the import. A module built with
+an earlier version of the crate reads the time the runtime states on every call, and still runs.
 
 ## Running a service
 
@@ -459,7 +571,9 @@ runtime refuses a module with problems, logging each. Locally, the ankka reposit
 | `AnkkaTestKit::start(Module::build()?)` | The whole module in the real runtime image and a throwaway Postgres (feature `testkit`, Docker). `restart()` starts a new runtime on the same database. |
 
 The kits that call other components take `with_service(build())` too. Unit kits run natively with
-`cargo test` and still round-trip every value through the codec. See [Testing](../build/testing.md).
+`cargo test` and still round-trip every value through the codec. `ScriptedServices`, `with_clock` and
+`with_random` stand in for other services, the runtime's clock and its random bytes, beside any kit. See
+[Testing](../build/testing.md).
 
 ## Developing the crate
 
