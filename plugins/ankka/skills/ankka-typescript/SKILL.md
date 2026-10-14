@@ -40,7 +40,9 @@ skill holds what differs.
 5. **Calls are awaited, typed from the handler table.** `await this.client.of(ShoppingCartEntity,
    id).call(ShoppingCartEntity.handlers.addItem).invoke(item)` takes the wire name and shapes from the
    declaration; `forEventSourcedEntity("shopping-cart", id).call("add-item", LineItem, Done)` is the form
-   by name. `forKeyValueEntity`, `forWorkflow`, `forAgent(...).call(...).stream(input)`, `views.get(viewId,
+   by name. `forKeyValueEntity`, `forWorkflow` (and `of(Workflow, id).awaitEnd(ms)`, `.awaitEndParts(ms)`
+   with `awaitPartJson` for an `sse` route, `.call(handler).thenAwaitEnd(ms).invoke(input)`),
+   `forAgent(...).call(...).stream(input)`, `views.get(viewId,
    key, Row)`, `views.all`, `timers.schedule(id, Duration, { component: Cls, handler: Cls.actions.x },
    input)`, `timers.scheduleRecurring(id, delay, period, { component: Cls, handler: Cls.actions.x }, input)`,
    `timers.cancel`. A refusal rejects with `CommandError` carrying `code`. Inside an endpoint
@@ -82,6 +84,14 @@ skill holds what differs.
     `GraphError`. Test with `GraphConsumerTestKit.of(Cls)`.
 12. **The process holds no durable state.** It may restart freely; the sidecar re-opens entities when it
     returns. Do not cache state across commands.
+13. **A replicated entity** is `static readonly replicated = true`; its effects are
+    `this.effects.handOverTo(name)`, `replicateTo(name)` and `stopReplicatingTo(name)`, alone or after
+    `persist`. A handler reads `this.context.installation` and `this.context.isHome`; `applyEvent` takes an
+    optional third argument, an `EventContext` (`installation`, `isLocal`, `sequence`), so a two-argument
+    `applyEvent` still compiles. A consumer reads `this.installation` and `this.localOrigin`, and
+    `static readonly mirroredChanges = true` makes one that publishes do so at every installation. Test a
+    follower with `EventSourcedTestKit.of(Cls, id, client, { kind: "follower", home, installation })` and
+    `kit.replay(events, writtenAt)`. It needs a runtime speaking protocol 1.19.
 
 ## Development loop
 

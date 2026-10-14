@@ -78,8 +78,11 @@ need a `Serializer` in scope; `Codecs.serializer[A]("manifest")` derives a JSON 
 | Effects | `effects.persist(e, more*)`, `persistAll(events)`, `deleteEntity()`, then `.thenReply(s => r)`, `.thenReplyState`, `.thenNoReply`, `.deleteEntity()`, `.expireAfter(d)`; `effects.reply(r)`, `effects.error(msg, code)`, `effects.noReply` |
 | Types | A command returns `Effect[R]`; a query returns `ReadOnlyEffect[R]` |
 | Snapshots | `snapshotEvery: Option[Int]`, `Some(100)` by default |
+| Replication | `override def replicated = true` on the companion; effects `effects.handOverTo(installation)`, `.replicateTo(installation)`, `.stopReplicatingTo(installation)`, alone or after `persist`; `commandContext.installation`, `commandContext.isHome`; `eventContext` (`installation`, `isLocal`, `sequence`) in `applyEvent` |
+| Calls | `forEventSourcedEntity(id).replication(Companion)`, a copy's `ReplicationStatus`; `.awaitHandover(Companion, installation, timeout)` |
 
-See [Event sourced entities](../build/event-sourced-entities.md).
+See [Event sourced entities](../build/event-sourced-entities.md) and
+[Replicated entities](../concepts/replicated-entities.md).
 
 ## Key value entity
 
@@ -119,7 +122,8 @@ fragments over the row's JSON, built with `jsonText("field") ++ sql" = $value"` 
 | Companion | `Consumer.Companion[C, Src, Out](componentId, source)` |
 | Must define | `onMessage(message: Src): Effect`, `create(ctx: ConsumerContext)` |
 | May override | `onDelete: Effect` (default: ignore), `produceTo: Option[String]` or `produces: Option[Publication]` (a topic with its contract and broker), `outputSerializer: Option[Serializer[Out]]`, `parallelism` (default 4) |
-| In a handler | `messageContext` (`subject`, `sequenceNumber`, `localOrigin`); the context's `componentClient` |
+| In a handler | `messageContext` (`subject`, `sequenceNumber`, `localOrigin`, `installation`); the context's `componentClient` |
+| Replicated sources | `mirroredChanges: Boolean`, `false` by default: a consumer that publishes is given only changes written at this installation unless it is `true` |
 | Effects | `effects.produce(out)`, `effects.produce(out, metadata)`, `effects.produceAll(messages)`, `effects.done()`, `effects.ignore()` |
 | One of several messages | `effects.message(out)`, then `.withKey(key)` to publish it under a record key other than its subject and `.withMetadata(metadata)` for its headers |
 
@@ -173,6 +177,7 @@ value is that `Long`. See [Publish a graph](../build/graph.md).
 | Settings | `WorkflowSettings.builder.timeout(d).defaultStepTimeout(d).stepTimeout(step, d).defaultRecovery(r).stepRecovery(step, r).build` |
 | Recovery | `RecoverStrategy.fail`, `RecoverStrategy.maxRetries(n)`, `.failoverTo(step)` |
 | Engine state | `componentClient.forWorkflow(id).lifecycle(Companion).invoke()` |
+| Waiting for the end | `componentClient.forWorkflow(id).awaitEnd(Companion, timeout)`; `call(Companion.handler).thenAwaitEnd(timeout).invoke(input)` to start and wait as one call; `EndpointClients.awaitEnd(id, Companion, timeout)` as server-sent events; a failure is `CommandError` with `ErrorCode.WorkflowFailed`, read by `WorkflowEnd.failure` |
 
 See [Workflows](../build/workflows.md).
 
@@ -260,7 +265,7 @@ See [Autonomous agents](../build/autonomous-agents.md).
 | A socket | `socket.receive(): Option[String]`, `None` once closed; `socket.send(text)`, which throws `SocketClosed` once closed; `CloseReason` names the close codes |
 | Testing a socket | `testKit.socket(path, headers, subprotocols)` or `TestSocket.open(url, …)`: `send`, `receive`, `close`, `closed()` (the code and reason; fails for a socket cut off), `subprotocol` |
 | In a handler | `request` (`header`, `query`, `caller`), `query` (`required`, `optional`, `all`, `flag`), `principal`, `caller` (`Caller.Gateway`, `Caller.Service(project, name)`, `Caller.Local`) |
-| ACLs | `Acl.DenyAll`, `Acl.AllowAll`, `Acl.AllowIf(ctx => …)`, `Acl.Authenticate(ctx => AuthDecision…)`, `Acl.allowCallers(Callers.internet, Callers.service("orders"), Callers.service(project, name), Callers.anyInProject, Callers.self)` |
+| ACLs | `Acl.DenyAll`, `Acl.AllowAll`, `Acl.AllowIf(ctx => …)`, `Acl.Authenticate(ctx => AuthDecision…)`, `Acl.allowCallers(Callers.internet, Callers.service("orders"), Callers.service(project, name), Callers.anyInProject, Callers.self, Callers.granted)`; a handler reads `caller`: `Caller.Gateway`, `Caller.Service(project, name)`, `Caller.Machine(organization, name)` or `Caller.Local` |
 | Other services | `clients.services(name)` or `clients.services(project, name)`: `get[R]`, `getText`, `post[B, R]`, `put[B, R]`, `delete`, `request`; the same `services` on a workflow's, a consumer's, a timed action's and an agent's context. Errors `ServiceUnresolvable`, `ServiceIdentityMismatch`, `ServiceUnanswered`, `ServiceCallFailed` ([Calling other services](../build/calling-services.md)) |
 | Testing a caller | `testKit.asCaller(caller)` gives the header that makes a request arrive as that caller |
 | Errors | throw `HttpProblem(status, message)` or `HttpProblem.badRequest`, `unauthorized`, `forbidden`, `notFound`, `conflict` |
@@ -308,11 +313,13 @@ val service = Ankka.service
 | Kit | Drives |
 |---|---|
 | `EventSourcedTestKit.of(Companion, id)` | One event sourced entity, no runtime. `call(handler)(input)` returns the events, reply or error. |
+| `EventSourcedTestKit.of(Companion, id, mode = Mode.Follower(home), installation = name)` | A replicated entity's copy as its home (`Mode.Home`) or a follower; `replay(events*)` with a `given WrittenAt` gives a follower its history. |
 | `KeyValueEntityTestKit.of(Companion, id)` | One key value entity, no runtime. |
 | `ConsumerTestKit.of(Companion, client)` | One consumer, no runtime. `onMessage(message, subject, sequenceNumber)` and `onDelete(subject, sequenceNumber)` return the effect and the `messages` it publishes: `payload`, the record `key` a broker is given, `metadata`, `text`. |
 | `ConsumerTestKit.graph(Companion, client)` | One graph consumer, no runtime. The same two calls return the `GraphDelta`s published, read back from their bytes; `records` gives the same consumer as messages. |
 | `TestTransport` | A `ComponentClient` whose calls are stubbed, for testing a component that calls others. |
 | `AnkkaTestKit.start(descriptors…)` | The whole service against a throwaway database of its own, in one Postgres container that every kit in the test JVM shares. `restartService()` drops every entity from memory. |
+| `AnkkaTestKit.installations(names*)` | A group of installations of one service, each on its own database, replicating through the runtime's own transport; `start(name, descriptors)` starts one, and `transport` pauses, resumes and blocks what reaches it. |
 | `TestModelProvider` | A scripted model that fails when its script runs out. |
 
 See [Testing](../build/testing.md).

@@ -81,6 +81,19 @@ of a service's storage credential and its mount certificate. One that already ex
 and its entries can be removed; a descriptor that takes a variable from one is refused at its next apply.
 Rename it and point the descriptor at the new name.
 
+A project secret whose name has a `.` can no longer be set either: names with a dot are a custom hostname's
+certificate. One that exists is kept and listed, and its entries can be removed.
+
+## Custom hostnames change three things an installation applies
+
+The Gateway admits listener sets and challenge routes from project namespaces, and cert-manager's
+controller runs with its Gateway API integration on. Both come with the components. The local overlay's
+root authority moves to the `cert-manager` namespace and `ankka-ca` becomes a `ClusterIssuer`, so a
+re-deployed kind cluster issues a new root: export it again with `deploy-local.sh` and run `ankka config
+set ca` with it. A cloud installation that wants custom hostnames adds the `letsencrypt-hostnames` issuer
+and sets `hostnameIssuer` and `gatewayAddress` on its `ankka-platform` ConfigMap; until it does, adding a
+custom hostname is refused, naming the setting.
+
 ## Consumer groups are named for the service
 
 Each view or consumer that reads a topic reads under a Kafka consumer group named for the service it
@@ -146,6 +159,21 @@ service with components the installation's broker on the operator's next pass. E
 broker is, and the certificate it holds is reissued with its name, so each service's instances are
 replaced once, as a rolling update that refuses no request. A service whose descriptor names a broker of
 its own is left as it is. See [The installation's broker](../platform/broker.md).
+
+## Keeping buckets in Google Cloud Storage
+
+An installation that keeps its buckets in Garage can keep new ones in Google Cloud Storage by naming
+`gcp` as its cloud provider, installing `ankka-gcp`, and setting `objectStoreBackend: gcs` with its
+`objectStorePrefix` in the `ankka-platform` ConfigMap (see [Install on GKE](../platform/install-gke.md)).
+Nothing already running changes: every bucket made in Garage stays there, with its credential, until a
+member moves it with `ankka services storage move`. Keep Garage installed beside it until every service has
+moved.
+
+The operator's grant includes `batch/jobs`, for the mover a move runs as a Job, and its Deployment names
+the mover's image. A storage credential issued before credentials could be issued again is generation 0
+and is replaced only when a member asks with `ankka services storage reissue`; the old one then goes on
+working for the installation's rotation grace (`cloudRotationGrace`, an hour as shipped), which governs a
+replaced credential in Garage as in Google Cloud Storage.
 
 ## The move to mutual TLS
 

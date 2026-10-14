@@ -131,6 +131,11 @@ kit.change(Shipments.customers, "c1", CustomerRenamed("Ada"))
 `ConsumerTestKit.graph(companion)` does the same for a [graph consumer](graph.md), returning its deltas;
 see [Testing a consumer](#testing-a-consumer).
 
+A component that reads a workflow is handed the workflow's standing with each state. The kits take it as
+an argument, `standing = Some(WorkflowLifecycle(...))` on `ConsumerTestKit`'s `onMessage` and on
+`KeyedViewTestKit`'s `change`, and hand it to the handler as the change's context would carry it. Without
+one, the handler is handed none, as it is for a change from an entity.
+
 Workflows, views, timed actions and agents are tested in Scala through the integration test kit, because
 what matters about them — transitions and recovery, projection, the agent loop — is the runtime's
 behaviour.
@@ -143,9 +148,9 @@ behaviour.
 | `EventSourcedTestKit.of(Entity, id)` | commands; the result has `events`, `reply`, `error`, `persisted`, `retention` |
 | `KeyValueTestKit.of(Entity, id)` | commands on a key value entity |
 | `WorkflowTestKit.of(Workflow, id)` | `call` a command, `run_step` a step, `run_until_end` to follow transitions |
-| `ViewTestKit.of(View)` | `on_change(key, event)`, `on_delete(key)`, then `get(key)` for the row |
+| `ViewTestKit.of(View)` | `on_change(key, event, standing=None)`, `on_delete(key)`, then `get(key)` for the row; `standing` is a workflow's `Standing`, for a view that reads one |
 | `KeyedViewTestKit.of(KeyedView)` | `change(Entity, key, event)`, `deleted(Entity, key)`, `answering(name, fn)`, then `get(key)` or `rows` |
-| `ConsumerTestKit.of(Consumer)` | `on_message(message, subject, sequence=…)`, `on_delete(subject)`; `messages` holds what it published, each with the key it named |
+| `ConsumerTestKit.of(Consumer)` | `on_message(message, subject, sequence=…, standing=…)`, `on_delete(subject)`; `messages` holds what it published, each with the key it named |
 | `GraphConsumerTestKit.of(GraphConsumer, client)` | `on_message(message, subject, sequence=…)`, `on_delete(subject, sequence=…)`, each returning the elements published |
 | `TimedActionTestKit.of(Action)` | `call(name, input, metadata={...})`, the metadata being what the handler reads, such as `ankka.due` |
 | `AgentTestKit.of(Agent, session, model)` | a handler plus the loop the sidecar would run, against a `ScriptedModel` |
@@ -195,9 +200,9 @@ def test_assistant_plans_and_the_tool_reads_the_cart() -> None:
 | `EventSourcedTestKit.of(Entity, id)` | `call(handler, input)`; the result has `events`, `newState`, `reply`, `error`, `noReply`, `retention` |
 | `KeyValueTestKit.of(Entity, id)` | the same, with `changed` in place of `events` |
 | `WorkflowTestKit.of(Workflow, id)` | `call` a command, `runStep` a step, `runUntilEnd` and `resume` to follow transitions |
-| `ViewTestKit.of(View)` | `onChange(key, event)`, `onDelete(key)`, then `get(key)` for the row |
+| `ViewTestKit.of(View)` | `onChange(key, event, metadata?, standing?)`, `onDelete(key)`, then `get(key)` for the row; `standing` is a workflow's, for a view that reads one |
 | `KeyedViewTestKit.of(KeyedView)` | `change(Entity, key, event)`, `deleted(Entity, key)`, `answering(name, fn)`, then `get(key)` or `rows` |
-| `ConsumerTestKit.of(Consumer)` | `onMessage(message, subject, metadata)`, `onDelete(subject)`; `produced` holds what it published, each with the key it named |
+| `ConsumerTestKit.of(Consumer)` | `onMessage(message, subject, metadata, standing?)`, `onDelete(subject)`; `produced` holds what it published, each with the key it named |
 | `GraphConsumerTestKit.of(GraphConsumer, client)` | `onMessage(message, { subject, sequence })`, `onDelete({ subject, sequence })`, each returning the deltas published |
 | `TimedActionTestKit.of(Action)` | `invoke(action, input, metadata)`, the metadata being what the handler reads, such as `ankka.due` |
 | `AgentTestKit.of(Agent, session, model)` | a handler plus the loop the sidecar would run, against a `ScriptedModel` |
@@ -216,9 +221,9 @@ dispatch the module's exports use:
 | `EventSourcedTestKit::<C>::new(id)` | `command(name, input)`; the outcome has `events`, `new_state`, `retention` and `reply::<R>()` |
 | `KeyValueEntityTestKit::<C>::new(id)` | commands on a key value entity |
 | `WorkflowTestKit::<C>::new(id)` | `command`, `run_step`, `run_to_end`, `resume`, `state` |
-| `ViewTestKit::<C>::new()` | `on_event(key, event)`, `on_deleted(key)`, then `row(key)` |
+| `ViewTestKit::<C>::new()` | `on_event(key, event)`, `on_deleted(key)`, then `row(key)`; `.standing(Standing)` hands each change a workflow's standing |
 | `KeyedViewTestKit::<C>::new()` | `change::<E>(source, key, event)`, `deleted(source, key)`, `answering(name, fn)`, then `row(key)` |
-| `ConsumerTestKit::<C>::new()` | `on_message(subject, message)`, `on_deleted(subject)`; `.at(sequence)` sets the sequence number, and `ConsumerTestKit::<C>::messages(&effect)` reads what an effect publishes, each message with its record key |
+| `ConsumerTestKit::<C>::new()` | `on_message(subject, message)`, `on_deleted(subject)`; `.at(sequence)` sets the sequence number, `.standing(Standing)` a workflow's standing, and `ConsumerTestKit::<C>::messages(&effect)` reads what an effect publishes, each message with its record key |
 | `GraphConsumerTestKit::<G>::new()` | `on_message(subject, sequence, message)`, `on_deleted(subject, sequence)`, each returning the elements published |
 | `EndpointTestKit::<E>::new()` | an endpoint's routes by method and path |
 
@@ -525,6 +530,12 @@ time each run was for, which is what a test of a recurring timer asserts. Views 
 so assert on them by retrying until the expected value appears, and retry on the value that changes
 rather than on the mere presence of a row.
 
+A test of something that happens in time — a timer a week away, a schedule, an outage — gives
+`TimerRuntime` a `MovableClock` and moves it; see [Timers](timers.md#testing-timers). An outage is
+`stopService()`, whatever happens while the service is down (moving the clock, say), then
+`startService()`, with other extensions if the service comes back changed; `restartService(extensions =
+…, whileStopped = …)` is the three in one. The kit's clients are not usable while the service is stopped.
+
 In Python and TypeScript the kit starts the real sidecar image beside Postgres, serves your
 components from the test process, and drives the routes through the sidecar. `restart()` replaces the
 sidecar against the same database. Mark the Python tests `@pytest.mark.slow` and run them with
@@ -560,6 +571,79 @@ fails, so that no test runs, prints what its setup logged, and so does a test wh
   captured.
 - **To see everything**, as when a test passes and you want to know why, set `ANKKA_TEST_LOGS=all`, or
   `-Dankka.test.logs=all` on the test JVM.
+
+## Several installations
+
+A [replicated entity](../concepts/replicated-entities.md) is tested at several installations of one
+service in one test. `AnkkaTestKit.installations(names*)` takes a database for each installation in the
+shared Postgres and returns a group; `start(name, descriptors)` starts one installation of the service,
+which knows every other installation's journal from its first start and replicates through the
+runtime's own replication transport. `stopAll()` stops every installation and gives back the databases.
+
+```scala
+val fleet = AnkkaTestKit.installations("smoke-a", "smoke-b")
+try
+  val a       = fleet.start("smoke-a", Seq(Fleet.vehicles.descriptor))
+  val b       = fleet.start("smoke-b", Seq(Fleet.vehicles.descriptor))
+  val atA     = a.componentClient.forEventSourcedEntity(EntityId("v1"))
+  val atB     = b.componentClient.forEventSourcedEntity(EntityId("v1"))
+  val created = atA.call(Fleet.vehicles.createVehicle).invoke(CreateVehicle(Vector("smoke-b")))
+  assertEquals(created.installation, Some("smoke-a"))
+  (1 to 3).foreach(n => atA.call(Fleet.vehicles.addStep).invoke(s"step-$n"))
+  val mirrored = AnkkaTestKit.eventually("smoke-b holds the three steps", 20.seconds) {
+    val v = atB.call(Fleet.vehicles.get).invoke()
+    Option.when(v.steps.size == 3)(v)
+  }
+  assertEquals(mirrored.writtenAt.distinct, Vector(Some("smoke-a")))
+  assertEquals(mirrored.local.distinct, Vector(false))
+  val forwarded = atB.call(Fleet.vehicles.recordInspection).invoke("brakes")
+  assertEquals(forwarded.installation, Some("smoke-a"))
+  val status = atB.replication(Fleet.vehicles)
+  assertEquals(status.home, Some("smoke-a"))
+  assertEquals(status.replicationSet, Set("smoke-a", "smoke-b"))
+finally fleet.stopAll()
+```
+
+A follower reads its home's records a poll at a time, so a test reads a follower with
+`AnkkaTestKit.eventually` until it holds what the test wrote, never once.
+
+The group's `transport` is what carries records between its installations, and a test makes it
+misbehave:
+
+| Call | What it does |
+|---|---|
+| `transport.pause(name)` | Stalls every record on its way to `name`, which falls behind; nothing is lost |
+| `transport.resume(name)` | Lets what was stalled through, in order |
+| `transport.block(from, to)` | Makes `to` unreachable from `from`: a write forwarded there fails at once, and records stop arriving |
+| `transport.unblock(from, to)` | Makes it reachable again |
+
+`restart(name, descriptors, settings = …)` stops one installation and starts it again on its own
+database with other settings, as a deploy would; `start(name, descriptors, database = Some(kit))` starts
+an installation on a database an unreplicated service wrote, which is how a test shows an existing
+entity becoming replicated.
+
+Several kits in one test JVM are installations sharing one machine, not installations on a network:
+what they prove is the runtime's replication over its own transport. Give each installation a name no
+other test in the same JVM uses at the same time.
+
+A single copy is tested without a runtime in the entity test kit, as the home or as a follower. A
+follower refuses a command that may persist `NotHome`, naming its home, and answers queries from history
+the test replays into it:
+
+```scala
+val kit = EventSourcedTestKit.of(
+  Fleet.vehicles,
+  "v1",
+  mode = EventSourcedTestKit.Mode.Follower(home = "leipzig"),
+  installation = "bratislava"
+)
+given EventSourcedTestKit.WrittenAt = EventSourcedTestKit.WrittenAt(Some("leipzig"))
+kit.replay(VehicleEvent.Created("v1"), VehicleEvent.StepAdded("frame"))
+```
+
+As the home, `mode = EventSourcedTestKit.Mode.Home`, every command runs and the handover or change to
+the replication set a command asks for is on its result. Python, TypeScript and Rust have the same two
+modes; see [Event sourced entities](event-sourced-entities.md#testing-a-replicated-entity).
 
 ## A test must be able to fail
 

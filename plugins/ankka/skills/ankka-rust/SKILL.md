@@ -40,7 +40,9 @@ Every component guide in the other ankka skills applies; this skill holds what d
    `.delete_entity()`, `.expire_after(d)`, `effects::reply(r)`, `effects::error(ErrorCode::Conflict, msg)`
    (`.into()` in a command); key value `effects::update_state(s)`, `delete_state()`; workflow
    `workflow::update_state(s).transition_to("step")`, `step_effects::update_state(s).then_transition_to(..)`,
-   `.then_pause_for(d, "step")`, `.then_end()`; views `view::update_row`, `delete_row`, `ignore`; consumers
+   `.then_pause_for(d, "step")`, `.then_end()` — and a caller waits for a workflow's end with
+   `ctx.client().await_end(Workflow, id, timeout)` or `invoke_then_await_end(...)`, from a step, a route
+   or a tool, since the instance is held for the wait; views `view::update_row`, `delete_row`, `ignore`; consumers
    `consumer::produce`, `done`, `ignore`; agents `agent::system_message(..).user_message(..).tools([..])
    .then_reply()`.
 7. **Endpoints declare `acl()` and typed routes.** `Routes::new().get("/{cartId}", Self::get_cart)
@@ -73,6 +75,16 @@ Every component guide in the other ankka skills applies; this skill holds what d
 12. **Deploy as a wasm-hosted service.** The descriptor sets `"hosting": "wasm"` and `"protocol"`; the
     image holds only the module and a command copying it to `/ankka/module/service.wasm`; the platform
     runs it as an init container and its own runtime as the one container. `"http": false` is refused.
+13. **A replicated entity** sets `const REPLICATED: bool = true`; its effects are
+    `effects::hand_over_to(name)`, `replicate_to(name)` and `stop_replicating_to(name)`, or the same on a
+    `Persist` after `persist`. A handler reads `ctx.installation()` and `ctx.is_home()`. `apply` is
+    unchanged: an entity that wants to know where an event was written overrides the provided
+    `apply_at(state, &event, &EventContext)` (`installation()`, `is_local()`, `sequence()`), which calls
+    `apply` by default, so no existing module changes. A consumer reads `ctx.written_at()` and
+    `ctx.local_origin()`, and `fn mirrored_changes() -> bool { true }` on a `Consumer` or `GraphConsumer`
+    makes one that publishes do so at every installation. Test with
+    `EventSourcedTestKit::<C>::new(id).in_mode(ReplicationMode::Follower { home, installation })`,
+    `kit.replay(events, Some(written_at))` and `outcome.replication`. It needs a runtime speaking 1.19.
 
 ## Development loop
 

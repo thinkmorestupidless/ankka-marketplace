@@ -41,8 +41,19 @@ The table is generated from the runtime's configuration files.
 | Variable | Configuration key | Default | Applies in |
 |---|---|---|---|
 | `ANKKA_SERVICE_NAME` | `ankka.service.name` | `""` | every service |
+| `ANKKA_INSTALLATION` | `ankka.replication.installation` | `""` | every service |
+| `ANKKA_VIEW_WATCH_BOUND` | `ankka.view.watch-bound` | `1000` | every service |
+| `ANKKA_VIEW_UNREAD_BOUND` | `ankka.view.unread-bound` | `256` | every service |
+| `ANKKA_VIEW_FETCH_SIZE` | `ankka.view.fetch-size` | `256` | every service |
 | `ANKKA_SECRET_KEY` | `ankka.secrets.key` | `""` | every service |
+| `ANKKA_SECRET_BACKEND` | `ankka.secrets.backend` | `""` | every service |
+| `ANKKA_SECRET_RECORDS_URL` | `ankka.secrets.records-url` | `""` | every service |
+| `ANKKA_SECRET_MOVE` | `ankka.secrets.move` | `""` | every service |
+| `ANKKA_SECRET_VERSIONS_KEPT` | `ankka.secrets.versions-kept` | `2` | every service |
+| `ANKKA_CLOUD_ACCOUNT` | `ankka.cloud.account` | `""` | every service |
+| `ANKKA_CLOUD_LOCATION` | `ankka.cloud.location` | `""` | every service |
 | `ANKKA_DATABASE` | `ankka.database` | `""` | every service |
+| `ANKKA_DB_LINE` | `ankka.history-line` | `""` | every service |
 | `ANKKA_SERVICE_CLIENT_TIMEOUT` | `ankka.service-client.timeout` | `30s` | every service |
 | `ANKKA_DB_HOST` | `pekko.persistence.r2dbc.connection-factory.host` | `"localhost"` | every service |
 | `ANKKA_DB_PORT` | `pekko.persistence.r2dbc.connection-factory.port` | `5432` | every service |
@@ -58,6 +69,12 @@ The table is generated from the runtime's configuration files.
 | `ANKKA_SOCKET_MAX_FRAME_SIZE` | `ankka.http.socket.max-frame-size` | `64KiB` | every service |
 | `ANKKA_SOCKET_UNREAD_FRAMES` | `ankka.http.socket.unread-frames` | `64` | every service |
 | `ANKKA_SOCKET_KEEP_ALIVE` | `ankka.http.socket.keep-alive` | `20s` | every service |
+| `ANKKA_SSE_HEARTBEAT` | `ankka.http.sse.heartbeat` | `15s` | every service |
+| `ANKKA_PROJECT_GRANTS` | `ankka.grants.file` | `""` | every service |
+| `ANKKA_PROJECT_DECLARATIONS` | `ankka.grants.declarations` | `""` | every service |
+| `ANKKA_MACHINE_ISSUER` | `ankka.machines.issuer` | `""` | every service |
+| `ANKKA_MACHINE_JWKS_URL` | `ankka.machines.jwks-url` | `""` | every service |
+| `ANKKA_MACHINE_JWKS_CA` | `ankka.machines.jwks-ca` | `""` | every service |
 | `ANKKA_GRPC_INTERFACE` | `ankka.grpc.interface` | `"0.0.0.0"` | a service that serves gRPC |
 | `ANKKA_GRPC_PORT` | `ankka.grpc.port` | `9090` | a service that serves gRPC |
 | `ANKKA_OTLP_ENDPOINT` | `ankka.telemetry.endpoint` | `""` | a service that exports telemetry |
@@ -67,6 +84,7 @@ The table is generated from the runtime's configuration files.
 | `ANKKA_CLUSTER_SEED_NODES` | `ankka.cluster.seed-nodes` | `""` | local mode |
 | `ANKKA_CLUSTER_PORT` | `pekko.remote.artery.canonical.port` | `0` | local mode |
 | `POD_IP` | `pekko.remote.artery.canonical.hostname` | required, set by the platform | kubernetes mode |
+| `ANKKA_SECRET_RECORDS_URL` | `ankka.secrets.records-url` | `"https://ankka-controlplane.ankka-controlplane.svc:9000"` | kubernetes mode |
 | `POD_IP` | `pekko.management.http.hostname` | required, set by the platform | kubernetes mode |
 | `ANKKA_CLUSTER_SERVICE` | `pekko.management.cluster.bootstrap.contact-point-discovery.service-name` | required, set by the platform | kubernetes mode |
 | `ANKKA_CLUSTER_CONTACT_POINTS` | `pekko.management.cluster.bootstrap.contact-point-discovery.required-contact-point-nr` | required, set by the platform | kubernetes mode |
@@ -78,6 +96,16 @@ Settings with no environment variable, overridable in the service's own `applica
 |---|---|---|
 | `ankka.ask-timeout` | `10s` | every service |
 | `ankka.query-resend-after` | `2s` | every service |
+| `ankka.replication.poll` | `1s` | every service |
+| `ankka.replication.handover.hold-writes` | `off` | every service |
+| `ankka.replication.handover.timeout` | `30s` | every service |
+| `ankka.view.listener-backoff.min` | `1s` | every service |
+| `ankka.view.listener-backoff.max` | `30s` | every service |
+| `ankka.secrets.timeout` | `10s` | every service |
+| `ankka.secrets.record-timeout` | `5s` | every service |
+| `ankka.secrets.secret-manager.endpoint` | `"https://secretmanager.googleapis.com"` | every service |
+| `ankka.secrets.secret-manager.token` | `""` | every service |
+| `ankka.secrets.secret-manager.identity` | `""` | every service |
 | `ankka.tls.cluster-directory` | `""` | every service |
 | `ankka.tls.service-directory` | `""` | every service |
 | `ankka.tls.reload-interval` | `1m` | every service |
@@ -94,6 +122,7 @@ Settings with no environment variable, overridable in the service's own `applica
 | `ankka.observability.max-external-services` | `32` | every service |
 | `ankka.observability.max-external-methods` | `256` | every service |
 | `ankka.http.body-timeout` | `10s` | every service |
+| `ankka.grants.reload-interval` | `10s` | every service |
 | `ankka.grpc.max-message-size` | `4MiB` | a service that serves gRPC |
 | `ankka.grpc.max-connection-age` | `2m` | a service that serves gRPC |
 | `ankka.grpc.shutdown-grace` | `5s` | a service that serves gRPC |
@@ -135,6 +164,12 @@ Settings with no environment variable, overridable in the service's own `applica
   which would otherwise cut a quiet socket off; a service whose keep-alive is not shorter does not start.
   A process-hosted service's sidecar holds its sockets, so all three are given to the sidecar and never
   to the process.
+- `ANKKA_SSE_HEARTBEAT` is how long a stream of server-sent events may be quiet before the service sends
+  a heartbeat, an event with no data that a browser does not dispatch, `15s` by default. When it is not
+  shorter than `pekko.http.server.idle-timeout`, the heartbeat is sent at half the idle timeout instead,
+  so a quiet stream — a watch of a view that writes nothing for a minute, say — is never ended by it.
+  A wait for a workflow's end served as a stream sends its `heartbeat` events at the same interval, from
+  the service and from the sidecar beside a process alike.
 
 ### gRPC
 
@@ -170,6 +205,27 @@ descriptor that sets any `ANKKA_DB_*` variable brings its own database instead.
   an entity, a view, a workflow or a timed action registered in the service refuses the start, naming
   itself. Empty, the default, the service has a database, the platform's or its own.
 
+- `ANKKA_DB_LINE` (`ankka.history-line`) names the line of history the service's database is on: the
+  database cluster it was first started on. The platform sets it on a service switched to a restore; on
+  the project database it is the cluster `ANKKA_DB_HOST` names. At start the service records when it
+  first ran on that line, and every message published from a journal event carries `ce-id`
+  `<line>/<persistence id>/<sequence>`, so an event published again after a restore keeps its id. Empty
+  in a local run, nothing is recorded and messages keep random ids.
+
+A view's query can be answered as a stream of rows, and a declared query watched
+([Views](../build/views.md#watching-a-query)):
+
+- `ANKKA_VIEW_WATCH_BOUND` is how many watches one instance holds open, every view together, `1000` by
+  default. One more is refused, naming the bound.
+- `ANKKA_VIEW_UNREAD_BOUND` is how many rows a watch holds for a watcher that has not read them, one per
+  row key, `256` by default, unless the watcher gives its own. Past it, the watcher's overflow strategy
+  decides.
+- `ANKKA_VIEW_FETCH_SIZE` is how many rows the database yields per fetch of a stream, `256` by default:
+  what a stream holds in hand however many rows it gives.
+
+Each reaches the runtime that holds the watches — beside a Python or TypeScript process, the sidecar,
+never the process.
+
 Never point two services at one database. Timers, view tables and projection offsets are not separated by
 service, so two services sharing a database delete each other's timers and overwrite each other's views.
 
@@ -189,6 +245,58 @@ service, so two services sharing a database delete each other's timers and overw
   platform's own program, never to a process or a module. Empty, the default, the service starts and
   keeping or reading a secret fails naming the variable. Set to anything that is not 32 bytes of base64,
   the service does not start. See [Secrets a service keeps](../build/secrets.md).
+
+- `ANKKA_SECRET_BACKEND` (`ankka.secrets.backend`) is where service secrets are kept: `postgres`, the
+  default, for the table in the service's own database; `secret-manager` for Google Secret Manager. The
+  installation's setting, given by the operator; a descriptor cannot set it.
+- `ankka.secrets.timeout` is how long one keep, read or removal waits for the backend before it fails as
+  unavailable, `10s` unless set.
+- `ankka.secrets.record-timeout` is how long the record of a read waits to be acknowledged before the read
+  fails as unavailable, `5s` unless set: no value is used without its record.
+- `ANKKA_SECRET_RECORDS_URL` (`ankka.secrets.records-url`) is where the record of each read is written. A
+  deployed service is given the control plane's address; empty, on your machine, the record is a line in
+  the log.
+- `ANKKA_SECRET_MOVE` (`ankka.secrets.move`) is the phase of a move to Secret Manager the instance performs
+  when it starts: `copy`, `check` or `remove`. Empty, the default, no move.
+- `ANKKA_SECRET_VERSIONS_KEPT` (`ankka.secrets.versions-kept`) is how many versions of a service secret
+  Secret Manager keeps, `2` unless set.
+- `ankka.secrets.secret-manager.endpoint` is Secret Manager's address, Google's unless a test runs a
+  stand-in; `ankka.secrets.secret-manager.token` is a fixed access token for that stand-in, and empty, as
+  deployed, means the pod's own token from the metadata server; `ankka.secrets.secret-manager.identity`
+  says whose secrets these are, `<project>/<service>`, when the service's certificate cannot.
+- `ANKKA_CLOUD_PROVIDER` (`ankka.cloud.provider`), `ANKKA_CLOUD_ACCOUNT` (`ankka.cloud.account`) and
+  `ANKKA_CLOUD_LOCATION` (`ankka.cloud.location`) are the installation's cloud: `none` or `gcp`, the
+  Google Cloud project the secrets are kept in, and the region they are kept in, automatic when empty.
+
+See [Secrets on the platform](../platform/secrets.md#choosing-a-backend).
+
+### Replication
+
+These configure [replicated entities](../concepts/replicated-entities.md). A service that names no
+installations replicates nothing, and its replicated entities behave as any event sourced entity.
+
+- `ANKKA_INSTALLATION` (`ankka.replication.installation`) names the installation this service runs at, a
+  DNS label of at most 63 characters. It is the platform's to name, so a descriptor that sets it is
+  refused; locally, set it in the environment of each process.
+- `ankka.replication.installations` lists the other installations the service may replicate with, by
+  name. For the runtime's own replication transport each names its journal's database as
+  `db { host, port, name, user, password }`, which reads that installation's records directly. The
+  variables `ANKKA_INSTALLATION_<NAME>_DB_HOST`, `_DB_PORT`, `_DB_NAME`, `_DB_USER` and `_DB_PASSWORD` add
+  an installation and its database from the environment, the name lower-cased with `_` read as `-`.
+  They reach the runtime alone, never a process beside it. A replication transport supplied on the
+  classpath, such as `ankka-replication`, needs only the names.
+- `ankka.replication.poll`, `1s`, is how often the runtime's own transport looks for records a follower
+  has not yet copied. A read at a follower may be this far behind its home.
+- `ankka.replication.handover.hold-writes`, `off` by default, decides what the old home does while a
+  handover waits for the new home to hold everything. Off, it goes on handling writes and completes the
+  handover at the first moment the new home has caught up. On, it holds writes while it waits, and
+  abandons the handover after `ankka.replication.handover.timeout`, `30s`.
+
+```bash
+ANKKA_INSTALLATION=leipzig \
+ANKKA_INSTALLATION_VIENNA_DB_HOST=localhost ANKKA_INSTALLATION_VIENNA_DB_NAME=vienna \
+ANKKA_INSTALLATION_VIENNA_DB_USER=ankka ANKKA_INSTALLATION_VIENNA_DB_PASSWORD=ankka sbt run
+```
 
 ### Local clusters
 
@@ -215,6 +323,12 @@ These are set by the platform on every deployed instance, and a descriptor that 
   the instance count and two.
 - `ANKKA_NAMESPACE_PREFIX` is how a project id becomes a namespace, `ankka-<project>`, which the service
   client uses to address another service by name.
+
+The installation's cloud is named for the platform's own processes and set on no instance:
+`ANKKA_CLOUD_PROVIDER`, `ANKKA_CLOUD_ACCOUNT`, `ANKKA_CLOUD_LOCATION`, `ANKKA_CLOUD_KMS_KEY`,
+`ANKKA_CLOUD_ACKNOWLEDGEMENT_BOUND` and `ANKKA_CLOUD_ROTATION_GRACE` are read by the operator, the
+control plane and the cloud provider, and a descriptor that sets one is refused. See
+[The cloud provider](../platform/cloud-provider.md).
 
 In `kubernetes` mode the remoting port is fixed at 17355, the management port at 7626 and the readiness
 port at 7627, and every one of them but readiness is mutual TLS with certificates the platform mounts under
@@ -278,10 +392,22 @@ sets them on the sidecar and on the process. A descriptor that sets any variable
 as the descriptor says. See [The installation's broker](../platform/broker.md).
 
 - `ANKKA_PROJECT_DECLARATIONS` names the file of the project's declarations — its topics with their
-  partitions, compaction and contract, and its declared brokers — which the platform mounts at
+  partitions, whether they are compacted and their contract, and its declared brokers — which the platform mounts at
   `/var/run/ankka/project/topics.json`. The runtime reads it once when the service starts and refuses a
   component whose stated contract is not the declared one, or that names a broker the project does not
   declare. Unset, nothing is checked. See [Contracts](../build/topics.md#contracts).
+- `ANKKA_PROJECT_GRANTS` names the file of the grants the service's project has made, which
+  `Callers.granted` admits by. Unset, the runtime reads `grants.json` beside the declarations file, which
+  is where the platform mounts it, so the platform sets nothing for it. The runtime re-reads the file
+  when it changes, looking every ten seconds: a grant takes effect, and a revoked grant refuses its caller
+  and closes what it admitted, with no restart. With neither variable set no caller holds a grant. See
+  [Cross-project access](../platform/cross-project-access.md).
+- `ANKKA_MACHINE_ISSUER` and `ANKKA_MACHINE_JWKS_URL` say where a registered machine's token comes from
+  and where the keys it is signed with are read; `ANKKA_MACHINE_JWKS_CA` is the authority that address is
+  trusted by, the service certificate's own `ca.crt` when unset. A request through the gateway carrying a
+  valid token from that issuer is that machine. Unset, the runtime reads `machines.json` beside the
+  declarations file, which is where the platform writes them, so the platform sets none of the three; with
+  neither, no token is verified and a bearer leaves the caller as it was.
 - `ANKKA_TOPIC_BROKER_<NAME>_BOOTSTRAP_SERVERS`, `ANKKA_TOPIC_BROKER_<NAME>_SHAPE`,
   `ANKKA_TOPIC_BROKER_<NAME>_SECRET_DIRECTORY` and `ANKKA_TOPIC_BROKER_<NAME>_NAME` are a broker the
   project declares, one set per broker with its name upper-cased and `-` as `_`: its address, the shape
@@ -289,6 +415,15 @@ as the descriptor says. See [The installation's broker](../platform/broker.md).
   is mounted at, and its declared name. The platform sets them on the platform's container of every
   service in the project, and never on a process. A component names the broker for one topic; see
   [A topic on another broker](../build/topics.md#a-topic-on-another-broker).
+- `ANKKA_TOPIC_DEFAULT_RETENTION`, `ANKKA_TOPIC_DEFAULT_RETENTION_SIZE`, `ANKKA_TOPIC_DEFAULT_CLEANUP`,
+  `ANKKA_TOPIC_DEFAULT_TOMBSTONE_WINDOW`, `ANKKA_TOPIC_DEFAULT_MIN_COMPACTION_LAG`,
+  `ANKKA_TOPIC_DEFAULT_MAX_COMPACTION_LAG`, `ANKKA_TOPIC_DEFAULT_COPIES`, `ANKKA_TOPIC_DEFAULT_MIN_IN_SYNC`,
+  `ANKKA_TOPIC_LONGEST_RETENTION`, `ANKKA_TOPIC_LARGEST_RETENTION_SIZE`, `ANKKA_TOPIC_MOST_COPIES` and
+  `ANKKA_TOPIC_WARNING_THRESHOLD` are the control plane's, not a service's: what a topic's first
+  declaration is given for a setting it leaves out, the bounds every declaration is held to, and the
+  retention below which a view reading a topic is warned. They are read once when the control plane starts
+  and are set on its Deployment; a value it cannot read stops it. Their shipped values and meanings are on
+  [The installation's broker](../platform/broker.md#topics).
 - `ANKKA_SERVICE_NAME`, or `ankka.service.name`, is a service's name when it runs on a developer's
   machine. Each view or consumer that reads a topic reads under a consumer group named for it, so two
   services on one broker never share one; with no name stated, a group is named for its component alone.

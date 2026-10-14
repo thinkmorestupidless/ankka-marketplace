@@ -28,7 +28,9 @@ deploys to the wrong one.
 - **A load balancer** your cluster can provision for a `Service` of type `LoadBalancer`, and a DNS
   record pointing `*.<base domain>` at its address.
 - **A container registry** the cluster can pull from, holding the platform's images: the operator, the
-  control plane, the sidecar, the console and, if you want the sample, the shopping cart.
+  control plane, the sidecar, the console and, if you want the sample, the shopping cart. Every image is
+  published for `linux/amd64` and `linux/arm64` under one tag, so the nodes may be of either
+  architecture, or both.
 
 ## What a production overlay changes
 
@@ -41,7 +43,8 @@ The overlay lists the same components as the local one, and patches or replaces 
 | Base domain and HTTPS port | `127.0.0.1.sslip.io`, port 8443 | your domain, port 443 |
 | Identity provider admin | a development secret, `admin`/`admin` | the secret deleted; you create one out of band |
 | Images | unqualified names loaded into the node | your registry, at a pinned release tag |
-| The broker's size | one node, 2Gi, a 512MB heap | the values you set in `broker-size.yaml` |
+| The broker's size | one node, 2Gi, a 512MB heap | the values you set in `broker-size.yaml`, and three nodes with every topic copied three times when you list the `broker-three-nodes` component |
+| Topic defaults and bounds | seven days, one copy, any retention allowed | the `ANKKA_TOPIC_*` variables you set on the control plane before the first topic is declared |
 
 Both overlays install the same two authorities the platform issues workload certificates from — one for
 traffic between a service's own instances, one for HTTP between services and from the gateway — as
@@ -87,6 +90,21 @@ secrets: a `ClusterIssuer` reads the secrets it references from cert-manager's o
 namespaced `Issuer` from its own namespace. Put the DNS provider's credential where the issuer you choose
 will look for it. A webhook solver may add its own rule: the example overlay's webhook reads its token
 with its own permissions in cert-manager's namespace, which is why it uses a `ClusterIssuer`.
+
+### Custom hostnames
+
+A service can answer at a name under a domain its owner brings (see [Serve a service at your own
+domain](../deploy/custom-hostnames.md)). Each such name gets a certificate of its own, since the wildcard
+covers only the base domain. The example overlay names a second `ClusterIssuer`, `letsencrypt-hostnames`,
+in `hostnameIssuer` on the `ankka-platform` ConfigMap: ACME over HTTP-01, answered through the gateway's
+port-80 listener, because the installation cannot write to another domain's zone. The load balancer must
+therefore pass port 80 as well as 443. The components already carry what that needs: cert-manager's
+controller runs with `--enable-gateway-api`, and the Gateway admits listener sets and challenge routes
+from project namespaces. Leave `hostnameIssuer` empty to refuse every custom hostname.
+
+Set `gatewayAddress` on the same ConfigMap to the load balancer's address so the control plane can tell a
+member the `A` record for an apex name, which cannot be a `CNAME`. Left empty, an apex is told that this
+installation has published no address.
 
 ### The identity provider's administrator
 
@@ -199,6 +217,14 @@ kubectl -n ankka-auth create secret generic ankka-keycloak-admin ...   # see abo
 kubectl apply -k kustomization/overlays/<your-overlay> --server-side --force-conflicts
 ```
 
+The overlay carries the `cloud-provider` component and the installation's cloud settings in its
+`ankka-platform` ConfigMap, with no provider named. To name one, set `cloudProvider`, `cloudAccount` and
+`cloudLocation` there, and install the provider's own Deployment into `ankka-cloud-provider` after the
+overlay; see [The cloud provider](cloud-provider.md).
+
+An installation whose buckets are in Google Cloud Storage names its object store there too
+(`objectStoreBackend`, `objectStorePrefix`, `objectStoreSoftDeleteDays`); see [Install on GKE](install-gke.md).
+
 The controllers go first because each brings custom resource definitions that the overlay's resources
 are instances of, and a single `kubectl apply -k` gives no ordering guarantee between a definition and a
 resource of that kind. Apply with `--server-side`: CloudNativePG's definitions are too large for
@@ -216,6 +242,29 @@ Check the exit code, not the count of lines that say `applied`.
 The realm import is one-shot: it creates the `ankka` realm if it does not exist and never updates it,
 so a later change to `kustomization/components/keycloak/realm-import.json` is made in Keycloak's console
 on an installation that already has the realm. Create the first users there too; the realm holds none.
+
+## A cluster of your own machines
+
+Nothing above assumes a cloud. A cluster you built yourself — k3s on a few machines, say — runs the
+platform the same way once it provides three things a cloud would otherwise hand you:
+
+- **An address for the gateway.** The gateway is a `Service` of type `LoadBalancer`, and something must
+  give it an address: k3s's built-in ServiceLB gives it a node's, which is enough for one network;
+  MetalLB gives it one from a pool you reserve. Point `*.<base domain>`, `api.<base domain>` and
+  `auth.<base domain>` at that address. A private address behind a public name is ordinary: DNS-01
+  issues the wildcard certificate by writing a record in your zone and never connects to the cluster,
+  so nothing need be reachable from the internet.
+- **A default storage class.** Every database the platform provisions asks the cluster for a volume of
+  its default class and names none. k3s ships `local-path`, which keeps a volume on the node that first
+  mounted it; that is fine for a lab and means a database follows its node.
+- **Nodes of either architecture.** amd64 or arm64, or a mix: every image of the platform's is published
+  for both, and nothing in the platform pins a workload to one. Your own services' images are yours to
+  build for the nodes you have; see [Build an image](../deploy/images.md#build-for-the-clusters-architecture).
+
+Memory is the constraint such a cluster usually meets first. The control plane, the operator, the
+identity provider, the gateway, the certificate manager and the database operator sit beside every
+service you deploy, and each service is a JVM. Leave out the `broker`, `garage` and `telemetry-store`
+components until something needs them.
 
 ## Check that the network enforces policy
 
@@ -255,7 +304,15 @@ The console is at `https://console.example.com`. A publicly trusted certificate 
 [Organizations, projects and members](organizations.md).
 
 Upgrading the installation is the same apply with new image tags. The operator, control plane, sidecar,
-console and CLI are released together as one version.
+console and CLI are released together as one version. Let the control plane's rollout finish before any
+service is deployed again: a service's runtime records each read of its secrets with the control plane,
+and refuses the read when the control plane does not yet know how.
+
+Where secrets are kept is `secretBackend` on the `ankka-platform` ConfigMap, with `cloudProvider`,
+`cloudAccount` and `cloudLocation` for Google Secret Manager; the record of reads is kept in a database of
+its own, `ankka-secret-reads-db`, which every overlay installs beside the control plane's. See
+[Secrets on the platform](secrets.md#choosing-a-backend) for each setting, what Google Cloud needs before
+an installation uses Secret Manager, and how an installation moves to it.
 
 ## A spoke installation
 

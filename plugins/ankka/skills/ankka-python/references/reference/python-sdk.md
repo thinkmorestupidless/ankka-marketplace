@@ -67,8 +67,10 @@ field names, `productId` rather than `product_id`, when a Scala service shares t
 | In a handler | `self.state`, `self.entity_id`, `self.context` (a `CommandContext`), `self.effects` |
 | Effects | `persist(e, *more)`, `persist_all(events)`, `delete_entity()`, then `.then_reply(lambda s: r)`, `.then_reply_state()`, `.then_no_reply()`, `.delete_entity()`, `.expire_after(timedelta)`; `reply(r)`, `error(msg, code)`, `no_reply()` |
 | Types | A command returns `EventSourcedEffect[S, E, R]`; a query returns `ReadOnlyEffect[S, E, R]` |
+| Replication | `replicated = True`; effects `hand_over_to(installation)`, `replicate_to(installation)`, `stop_replicating_to(installation)`, alone or after `persist`; `self.context.installation`, `self.context.is_home`; `self.event_context` (`installation`, `is_local`, `sequence`) in `apply_event`; `EventSourcedTestKit.of(cls, id, mode="follower", home=name, installation=name)` and `kit.replay(*events, written_at=name)` |
 
-See [Event sourced entities](../build/event-sourced-entities.md).
+See [Event sourced entities](../build/event-sourced-entities.md) and
+[Replicated entities](../concepts/replicated-entities.md).
 
 ## Key value entity
 
@@ -88,10 +90,10 @@ See [Key value entities](../build/key-value-entities.md).
 | Part | API |
 |---|---|
 | Base class | `ankka.view.View[Src, Row]` |
-| Class attributes | `component_id`, `source` (an entity class) or `topic` (a topic name), `event_codec`, `row_codec`; optionally `version`, and declared queries as `query(name, statement)` from `ankka.view` |
+| Class attributes | `component_id`, `source` (an entity or workflow class) or `topic` (a topic name), `event_codec`, `row_codec`; optionally `version`, and declared queries as `query(name, statement)` from `ankka.view` |
 | Must define | `on_change(self, event) -> ViewEffect` |
 | May override | `on_delete(self) -> ViewEffect`, which deletes the row by default |
-| In a handler | `self.row` (the current row or `None`), `self.metadata` (`subject`, `sequence_number`), `self.effects` |
+| In a handler | `self.row` (the current row or `None`), `self.metadata` (`subject`, `sequence_number`), `self.standing` (a workflow source's `Standing`, else `None`), `self.effects` |
 | Effects | `update_row(row)`, `delete_row()`, `ignore()` |
 | Querying | `client.views.get(view_id, key, RowType)`, `client.views.all(view_id, RowType)`, `client.views.ask(view_id, name, RowType, {"value": ...}, limit=None)` |
 | Table name | `table_of(component_id)`, for a statement to name |
@@ -117,7 +119,8 @@ See [Views](../build/views.md).
 | Class attributes | `component_id`, `source` or `topic`, `message_codec`; for a topic, `start_from`, `contract`, `broker`, `parallel`; to publish, `produces_to` (a topic, or a `Publication` with its contract and broker) and `out_codec` |
 | Must define | `async on_message(self, message) -> ConsumerEffect` |
 | May override | `on_delete(self)`, which ignores by default |
-| In a handler | `self.metadata` (`subject`, `sequence_number`), `self.client`, `self.effects` |
+| In a handler | `self.metadata` (`subject`, `sequence_number`), `self.standing` (a workflow source's `Standing`, else `None`), `self.installation`, `self.local_origin`, `self.client`, `self.effects` |
+| Replicated sources | `mirrored_changes = True` gives a consumer that publishes changes written at other installations too |
 | Effects | `produce(out, metadata=None)`, `produce_all(messages)`, `done()`, `ignore()` |
 | One of several messages | `self.effects.message(out, key=None, metadata=None)`; `key` is a record key other than the message's subject |
 
@@ -230,7 +233,7 @@ result against its task type and rules. See [Autonomous agents](../build/autonom
 | Decorators | `@get`, `@post`, `@put`, `@patch`, `@delete`, `@sse`, `@socket`, each with a path template and an optional `acl=` for that route alone |
 | A socket | the handler's parameter annotated `Socket`: `async for text in socket`, `await socket.receive()` (`None` once closed), `await socket.send(text)`, which raises `SocketClosed` once closed; testing, `EndpointTestKit.socket(path, frames)` answers what the handler sent and how it ended |
 | Handlers | `async` methods; path parameters bind by name, one further typed parameter is the body, the return value is encoded by its type |
-| Callers | `Callers.internet`, `Callers.service(name, project=None)`, `Callers.any_in_project`, `Callers.self_` |
+| Callers | `Callers.internet`, `Callers.service(name, project=None)`, `Callers.any_in_project`, `Callers.self_`, `Callers.granted`; a request's `caller` is `Gateway`, `ServiceCaller`, `MachineCaller` or `LocalCaller` |
 | In a handler | `self.request`: `query_param`, `query_params`, `header`, `principal` (`subject`, `name`, `email`, `email_verified`, `roles`, `claims`, `issuer`), `metadata`, `caller` — a `Gateway`, `ServiceCaller(project, name)` or `LocalCaller` |
 | Errors | raise `HttpProblem(status, message)`; a `CommandError` from a call answers with its code's status |
 
@@ -252,7 +255,7 @@ state = await cart.call("get-cart").invoke(reply=ShoppingCart)
 |---|---|
 | Event sourced entity | `client.for_event_sourced_entity(component_id, entity_id)` |
 | Key value entity | `client.for_key_value_entity(component_id, entity_id)` |
-| Workflow | `client.for_workflow(component_id, workflow_id)` |
+| Workflow | `client.for_workflow(component_id, workflow_id)`; `.await_end(timeout, reply=State)` waits for its end, `.await_end_parts(timeout, reply=State)` as parts for an `@sse` route, and `.call(name).then_await_end(timeout).invoke(input, reply=State)` starts and waits as one call |
 | Agent | `client.for_agent(component_id, session_id)` |
 
 `.call(name)` gives an invocation: `await invocation.invoke(input, reply=Type)`, or
