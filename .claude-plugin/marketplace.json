@@ -30,7 +30,7 @@
       "name": "satisfactory",
       "source": "./plugins/satisfactory",
       "description": "The satisfactory documentation as skills — the service and its API, the Scala client, using it from an ankka application, and writing a model.",
-      "version": "0.1.0"
+      "version": "0.1.1"
     }
   ]
 }
