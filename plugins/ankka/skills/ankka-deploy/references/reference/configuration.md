@@ -55,6 +55,8 @@ The table is generated from the runtime's configuration files.
 | `ANKKA_DATABASE` | `ankka.database` | `""` | every service |
 | `ANKKA_DB_LINE` | `ankka.history-line` | `""` | every service |
 | `ANKKA_SERVICE_CLIENT_TIMEOUT` | `ankka.service-client.timeout` | `30s` | every service |
+| `ANKKA_STORAGE_BACKEND` | `ankka.storage.backend` | `""` | every service |
+| `ANKKA_STORAGE_DIR` | `ankka.storage.directory` | `".ankka/storage"` | every service |
 | `ANKKA_DB_HOST` | `pekko.persistence.r2dbc.connection-factory.host` | `"localhost"` | every service |
 | `ANKKA_DB_PORT` | `pekko.persistence.r2dbc.connection-factory.port` | `5432` | every service |
 | `ANKKA_DB_NAME` | `pekko.persistence.r2dbc.connection-factory.database` | `"ankka"` | every service |
@@ -66,6 +68,7 @@ The table is generated from the runtime's configuration files.
 | `ANKKA_DB_SSL_KEY` | `pekko.persistence.r2dbc.connection-factory.ssl.key` | `""` | every service |
 | `ANKKA_HTTP_INTERFACE` | `ankka.http.interface` | `"0.0.0.0"` | every service |
 | `ANKKA_HTTP_PORT` | `ankka.http.port` | `9000` | every service |
+| `ANKKA_HTTP_MAX_STREAM_BYTES` | `ankka.http.max-stream-bytes` | `5g` | every service |
 | `ANKKA_SOCKET_MAX_FRAME_SIZE` | `ankka.http.socket.max-frame-size` | `64KiB` | every service |
 | `ANKKA_SOCKET_UNREAD_FRAMES` | `ankka.http.socket.unread-frames` | `64` | every service |
 | `ANKKA_SOCKET_KEEP_ALIVE` | `ankka.http.socket.keep-alive` | `20s` | every service |
@@ -106,6 +109,10 @@ Settings with no environment variable, overridable in the service's own `applica
 | `ankka.secrets.secret-manager.endpoint` | `"https://secretmanager.googleapis.com"` | every service |
 | `ankka.secrets.secret-manager.token` | `""` | every service |
 | `ankka.secrets.secret-manager.identity` | `""` | every service |
+| `ankka.storage.descriptor-directory` | `""` | every service |
+| `ankka.storage.timeout` | `30s` | every service |
+| `ankka.storage.max-signed-url` | `7d` | every service |
+| `ankka.storage.default-signed-url` | `15m` | every service |
 | `ankka.tls.cluster-directory` | `""` | every service |
 | `ankka.tls.service-directory` | `""` | every service |
 | `ankka.tls.reload-interval` | `1m` | every service |
@@ -136,6 +143,15 @@ Settings with no environment variable, overridable in the service's own `applica
 | `ankka.telemetry.shutdown-timeout` | `3s` | a service that exports telemetry |
 | `ankka.telemetry.service-name` | `""` | a service that exports telemetry |
 | `ankka.telemetry.project` | `""` | a service that exports telemetry |
+| `ankka.mcp.client-keys.last-use-interval` | `1 minute` | a service with an MCP endpoint that admits client keys or signs people in |
+| `ankka.mcp.client-keys.query` | `${pekko.persistence.r2dbc.query}` | a service with an MCP endpoint that admits client keys or signs people in |
+| `ankka.mcp.client-keys.query.refresh-interval` | `500ms` | a service with an MCP endpoint that admits client keys or signs people in |
+| `ankka.mcp.sign-in.token-lifetime` | `1 hour` | a service with an MCP endpoint that admits client keys or signs people in |
+| `ankka.mcp.sign-in.refresh-lifetime` | `30 days` | a service with an MCP endpoint that admits client keys or signs people in |
+| `ankka.mcp.sign-in.grant-lifetime` | `10 minutes` | a service with an MCP endpoint that admits client keys or signs people in |
+| `ankka.mcp.sign-in.client-lifetime` | `30 days` | a service with an MCP endpoint that admits client keys or signs people in |
+| `ankka.mcp.sign-in.rotate-every` | `30 days` | a service with an MCP endpoint that admits client keys or signs people in |
+| `ankka.mcp.sign-in.keep-for` | `31 days` | a service with an MCP endpoint that admits client keys or signs people in |
 | `ankka.cluster.formation` | `join-self-or-seeds` | local mode |
 | `ankka.join-self-if-no-seed-nodes` | `on` | local mode |
 | `ankka.cluster.formation` | `bootstrap` | kubernetes mode |
@@ -170,6 +186,11 @@ Settings with no environment variable, overridable in the service's own `applica
   so a quiet stream — a watch of a view that writes nothing for a minute, say — is never ended by it.
   A wait for a workflow's end served as a stream sends its `heartbeat` events at the same interval, from
   the service and from the sidecar beside a process alike.
+- `ANKKA_HTTP_MAX_STREAM_BYTES` (`ankka.http.max-stream-bytes`) is the largest body a stream route
+  (`postStream`, `putStream`) reads, `5g` by default. A request declaring a larger one is answered `413`
+  and the handler never runs. A route that reads its body whole keeps
+  `pekko.http.server.parsing.max-content-length`. See
+  [HTTP endpoints](../build/http-endpoints.md#streamed-bodies).
 
 ### gRPC
 
@@ -270,6 +291,27 @@ service, so two services sharing a database delete each other's timers and overw
 
 See [Secrets on the platform](../platform/secrets.md#choosing-a-backend).
 
+### Storage client
+
+- `ANKKA_STORAGE_BACKEND` (`ankka.storage.backend`) is what stands behind every bucket the storage client
+  reaches: `s3`, `directory` or `memory`. Empty, the default, chooses `s3` when the service is given a
+  store's variables (`ANKKA_S3_ENDPOINT`, or a supplied bucket's), `directory` when it runs on a
+  developer's machine, and otherwise no store, so every call is refused naming `provisionObjectStorage`.
+  `memory` is what the test kits use.
+- `ANKKA_STORAGE_DIR` (`ankka.storage.directory`) is where the directory store keeps its objects, one
+  directory per bucket, `.ankka/storage` under the working directory by default.
+- `ankka.storage.descriptor-directory` is where the service's own `service.json` is read from for the
+  buckets it declares, on a developer's machine and in a test; empty, the default, is the working
+  directory.
+- `ankka.storage.timeout` is how long one request to the store waits for its answer before failing as
+  `Unavailable`, `30s` by default.
+- `ankka.storage.max-signed-url` is the longest span a signed URL may be made for, `7d`, and
+  `ankka.storage.default-signed-url` the span one is made for when the caller gives none, `15m`.
+
+The buckets themselves come from the `ANKKA_S3_*` variables the platform gives a service, described in
+[Object storage on the platform](../platform/object-storage.md). See
+[Objects a service keeps](../build/object-storage.md).
+
 ### Replication
 
 These configure [replicated entities](../concepts/replicated-entities.md). A service that names no
@@ -339,17 +381,49 @@ port at 7627, and every one of them but readiness is mutual TLS with certificate
 
 - `ANTHROPIC_API_KEY` is the key for Anthropic's API. A Scala service reads it when it constructs its
   model provider. In a process-hosted service it belongs to the sidecar, which runs the agent loop; the
-  platform routes it there.
-- `ANKKA_MODEL_NAME` names the Anthropic model a process-hosted service's agents use when they name none.
-  It is read by the sidecar.
+  platform routes it there, and the sidecar configures the provider `anthropic` from it.
+- `OPENAI_API_KEY` is the key for OpenAI's API, read the same way; the sidecar configures `openai` from
+  it.
+- `ANKKA_MODEL_NAME` names the Anthropic model `anthropic` uses. It is read by the sidecar.
+- `ANKKA_MODEL_<NAME>_PROTOCOL`, `_URL`, `_MODEL`, `_KEY`, `_SHAPE` and `_PRESET` configure a model
+  provider named `<name>` on the sidecar: either protocol at any address, by hand or from a preset.
+- `ANKKA_MODEL_DEFAULT` names the provider that answers an agent naming none, when the sidecar has more
+  than one. [Model providers](model-providers.md) lists every setting, preset and refusal.
 - `ANKKA_MODEL_SCRIPT` gives the sidecar a scripted model instead of a real one, for tests: a JSON array
   of turns, or the path of a file holding one. Each turn is `{"text": "..."}`, a tool call
   `{"tool": "name", "arguments": {...}}`, several tool calls `{"tools": [...]}`, or `{"refusal": "..."}`,
   consumed in order; `{"when": "<part of the user's message>", "text": "..."}` is a standing rule used once
   the turns run out. With both a key and a script set, the key wins.
 
-Every variable beginning `ANTHROPIC_` or `ANKKA_MODEL_` in a process-hosted service's descriptor goes to the
-sidecar, never to the process.
+Every variable beginning `ANTHROPIC_`, `OPENAI_` or `ANKKA_MODEL_` in a process-hosted service's
+descriptor goes to the sidecar, never to the process.
+
+- `ANKKA_MODELS_ADDRESS` is where the installation's model server answers its services, set by the platform
+  on the platform's container of every instance when the installation has a model server, and on nothing
+  when it has none. A descriptor that sets it is refused. The operator and the control plane read the same
+  variable from the model server's component, and the operator also reads `ANKKA_MODELS_STATUS_URL`, the
+  model server's status document, and `ANKKA_MODELS_NAMESPACE`, where it runs. The three are set together
+  or not at all: the operator refuses to start with some and not others. See
+  [Models served by the installation](../platform/installation-models.md).
+
+### The model server's keeper
+
+The keeper beside Ollama in the `models` component reads its own variables, set by the component:
+
+- `ANKKA_KEEPER_ADDRESS` is the address services call, required; it is what the status document reports.
+- `ANKKA_KEEPER_OLLAMA` is where Ollama answers, `http://127.0.0.1:11434` unless set. Ollama is bound to
+  the pod's loopback, so the keeper is the only way in.
+- `ANKKA_KEEPER_DECLARATION` is the declaration file, `/etc/ankka/models/models.json` unless set: the
+  `models-declaration` ConfigMap's `models.json`, mounted.
+- `ANKKA_KEEPER_PORT` is the mutual TLS port services call, 8443 unless set; `ANKKA_KEEPER_STATUS_PORT`
+  serves the status document without TLS to the operator, 8080 unless set; and `ANKKA_KEEPER_PROBE_PORT`
+  answers the readiness probe, 7627 unless set.
+- `ANKKA_KEEPER_PASS_INTERVAL` is how often the keeper compares what is declared with what is held, `30s`
+  unless set. An edit to the declaration is also noticed when the mounted file changes.
+- `ANKKA_KEEPER_PARALLEL` is how many calls Ollama answers at once, 1 unless set, which the keeper reports; set it to the
+  same number as Ollama's own `OLLAMA_NUM_PARALLEL`.
+- `ANKKA_OTLP_ENDPOINT`, `ANKKA_OTLP_HEADERS` and `ANKKA_INSTALLATION` export the keeper's traces and metrics
+  as a service's are; with no endpoint nothing is exported.
 
 - `ANKKA_MCP_CONNECT_TIMEOUT` (`ankka.agent.mcp.connect-timeout`) is how long the runtime waits for each MCP
   server an agent lists to answer when the service starts, `10s` unless set; a server that does not answer in
@@ -455,6 +529,34 @@ read, so the control plane's own `ANKKA_AUTH_ISSUER`, `ANKKA_AUTH_JWKS_URL` and 
 described on [Identity and machine accounts](../platform/identity.md), can sit beside a service's set. A
 name listed twice, a name that is not a word, a required variable missing, a CA that is not a file or a
 skew that is not a duration stops the service starting, with every problem named at once.
+
+### MCP endpoints
+
+A service whose MCP endpoint admits client keys or opts into brokered sign-in registers the MCP runtime,
+and these settings are read only then. They have no variables; a service overrides them in its
+`application.conf`.
+
+- `ankka.mcp.client-keys.last-use-interval` is how often a client key's last use is written down, `1 minute`
+  by default. A key used on every request is noted in memory and written at most once an interval, so a
+  busy assistant does not write on every call; a key's listing is that far behind at most.
+- `ankka.mcp.client-keys.query` is the read journal each instance follows the keys with, the runtime's own
+  with its connection pool, polling every `500ms` (`query.refresh-interval`). It is what bounds how soon
+  a key issued or revoked on one instance is known on the others.
+- `ankka.mcp.sign-in.token-lifetime` is how long a token the sign-in broker mints is good for, `1 hour`;
+  `refresh-lifetime`, its refresh token's, `30 days`, replaced each time it is used.
+- `ankka.mcp.sign-in.grant-lifetime` is how long a pending sign-in and the code it becomes wait to be used,
+  `10 minutes`; `client-lifetime`, how long a registered client that is never used is kept, `30 days`.
+- `ankka.mcp.sign-in.rotate-every` and `ankka.mcp.sign-in.keep-for` are how often the broker makes a new
+  signing key, `30 days`, and how long each is kept to verify what it signed, `31 days`. One key is always
+  kept.
+
+A brokered endpoint signs people in at the first issuer its ACL lists, as a client of that issuer. Two
+more variables of the issuer's set say who the broker is there:
+
+| Variable | Required | Meaning |
+|---|---|---|
+| `ANKKA_AUTH_<NAME>_CLIENT_ID` | for each issuer of a brokered endpoint's ACL | The client id the broker is registered as at the issuer. Without it, a service with a brokered endpoint does not start. |
+| `ANKKA_AUTH_<NAME>_CLIENT_SECRET` | no | The client's secret, for an issuer that registered the broker as a confidential client. Without it, the broker is a public client and proves itself with PKCE alone. |
 
 ### Process-hosted services
 

@@ -87,8 +87,28 @@ feature also says what that feature does not do.
 - **One cloud provider and one cloud account per installation.** A project names no account of its own. The
   platform deletes nothing in a cloud account, ever: removing what a provider made is the administrator's
   task.
-- **No storage client in the SDKs.** A service keeps and reads objects with its own language's S3 client. A
-  service run on a developer's own machine is given no bucket.
+- **An object is kept and read whole.** The storage client has no directories, no rename, no copy, no append
+  and no partial writes, and keeps nothing beside an object but its content type. A put declares its
+  length, so a body of unknown length is read first or uploaded through a signed URL.
+- **A module's objects are at most 4,000,000 bytes.** A Rust service's put and get carry the whole object
+  through the runtime; a larger one goes through a signed URL.
+- **A keep through a signed URL on a developer's machine is at most 4,000,000 bytes for Python and
+  TypeScript**, since the directory store's address is served through the platform's program beside the
+  process. A deployed service's signed URLs are the store's, with no such bound.
+- **A Python or TypeScript service's routes read their bodies whole.** Only a Scala endpoint streams a
+  request or a response; the other languages send large objects through signed URLs.
+- **A signed URL spans at most seven days.**
+- **A gRPC endpoint has no storage client.**
+- **A supplied bucket is checked on its first call**, not when the service starts: a wrong endpoint or key
+  is a refused call, not a refused start.
+- **An installation model is reached only inside an installation.** A service run on a developer's own
+  machine is given no [model server](../platform/installation-models.md): a provider whose preset is
+  `installation` is refused at start there, and the developer points a provider at a server of their own.
+- **One model server per cluster, serving the models its administrator declared.** It runs one replica.
+  No service can fetch, upload, remove or make a model, and the server serves nobody outside the
+  installation. It serves chat completions only: no embeddings, and an agent's judgments are not made on
+  it. Its models are fetched from Ollama's registry, so an installation that cannot reach it supplies its
+  models some other way. A remote cluster has no model server of its own.
 - **Listings can lag.** Organization, project and service listings are read from projections and may miss a
   change made a moment ago. Checks that depend on a count — "the project has no services" before it is
   deleted — use the same projections, so they guard against the obvious mistake rather than every race.
@@ -172,7 +192,12 @@ feature also says what that feature does not do.
 - **Nothing at the gateway but routing.** There is no authentication, rate limiting or header policy at the
   gateway, and one gateway per installation.
 - **Two protocols: HTTP and gRPC.** A service has at most an HTTP port and a gRPC port, and serves no other
-  protocol. A web page cannot call a gRPC endpoint: gRPC-Web is not routed.
+  protocol. A web page cannot call a gRPC endpoint: gRPC-Web is not routed. An MCP endpoint rides on the
+  HTTP port.
+- **The sign-in broker holds no account and no password.** The platform signs people in for a service only
+  through a broker the service's MCP endpoint opted into, which sends each person to the service's own
+  issuer and mints a token only for that endpoint. A service that has not opted in has no authorization
+  server, and no part of the platform keeps the accounts of the people a service serves.
 - **A gRPC service's peers address is skipped if its name is taken.** A service that serves gRPC has a
   headless address named `<service>-grpc-peers`. If another service in the project is called that, the
   platform leaves that service's address alone and does not create the peers address, and callers then
@@ -365,6 +390,24 @@ feature also says what that feature does not do.
 - **A session that recorded judgment tokens is unreadable by an older runtime.** While a service is being
   rolled onto its first version that uses judgments, an instance still running the previous version cannot
   replay a session in which a judgment's tokens have been recorded, until the roll completes.
+- **Model providers speak two protocols, and nothing more of any vendor's API.** Every provider is
+  Anthropic's Messages protocol or OpenAI's, in its Responses or Chat Completions shape. A vendor's own
+  hosted tools (web search, file search, code interpreter), embeddings, and Gemini's native API are not
+  used; Gemini is reached through its OpenAI-compatible endpoint. A Bedrock endpoint takes a Bedrock API
+  key and an Azure one an API key: neither request signing nor Entra credentials are configured by
+  variable, though a Scala service may hand either provider a client of its own.
+- **A model provider at an address of the developer's own gives less than a vendor's.** A compatible
+  endpoint never produces a refusal: a model that declines in prose has answered, and a guardrail is the
+  place to catch it. Cache accounting is what the endpoint reports, which for a local server is none.
+  Whether a model calls a tool, rather than writing a call in its text, is the model's and its chat
+  template's to get right.
+- **A model's reasoning is carried within a turn only.** OpenAI's reasoning models are handed back what
+  they reasoned with a tool's result for the rest of the turn, and never after: a turn that waits for a
+  person to approve a tool goes on without it, and so does an autonomous agent's task after its instance
+  restarts. The protocol accepts that, at some cost to the answer.
+- **A process names a configured provider, not a model.** A Python, TypeScript or Rust handler names one
+  of the providers the sidecar was configured with, each with one model; it cannot choose another model
+  of the same provider for one interaction.
 - **MCP servers are reached over Streamable HTTP only.** There is no stdio or other transport, so a server
   that runs as a local program is reached through a small HTTP bridge. Only a server's tools are used —
   not its resources or prompts — and a server is listed in code, not discovered.
@@ -374,6 +417,14 @@ feature also says what that feature does not do.
   is no editing its arguments, and a decision is not streamed back to a caller still connected.
 - **A module's agents take no part in approvals or MCP servers.** A WebAssembly module declares neither,
   and its client answers a call that would wait for a person as a conflict.
+- **An MCP endpoint offers tools and nothing else.** It offers no resources or prompts, and asks the client
+  for no sampling or elicitation.
+- **An MCP endpoint keeps nothing between requests.** It issues no session and sends no notice that its
+  tools changed; a change to a service's tools is seen by an MCP client at its next listing.
+- **There is no one MCP endpoint for every service of a project.** Each service serves its own tools at its
+  own address, and a client that wants several services' tools lists each.
+- **A route referred to as a tool takes its body as JSON.** A route whose body is another content type
+  cannot be referred to; a tool with a handler of its own can call it.
 - **Output guardrails cannot unsay a stream.** On a streaming agent handler, output guardrails run after the
   tokens have been delivered. They can stop the reply being written to memory, but not un-send it. Use input
   guardrails for anything that must never be shown.
@@ -394,6 +445,9 @@ feature also says what that feature does not do.
   package, and the Linux builds need glibc, so they do not run on musl (Alpine); the release's zip runs
   anywhere with a JDK 21. The macOS executables are not signed by Apple. `ankka init` needs `sbt` on
   `PATH` for a Scala service.
+- **`ankka mcp` serves no plugin's commands.** A program run as an `ankka` plugin is a command at the
+  shell only; a coding agent reaches it by running the shell. The CLI asks a plugin nothing about
+  itself, so `ankka --help` lists a plugin by its word, with no description.
 - **The template waits on a release.** `sbt new thinkmorestupidless/ankka.g8` works once a release has
   published the template; until then use `sbt new file:///path/to/ankka/ankka.g8` from a checkout.
 - **No local image registry.** A local platform loads images straight into its cluster with

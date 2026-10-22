@@ -58,7 +58,8 @@ skill holds what differs.
    maxRetries: 1, failoverTo: "compensate" } } } })`. A step that *throws* is retried and failed over; a
    step that returns `thenFail()` ends the workflow. An agent's plan names tools and guardrails by wire
    name (`.tools("lookup")`); `memory(false)` for one-shot; the model is configured on the sidecar
-   (`ANTHROPIC_API_KEY`, `ANKKA_MODEL_NAME`, `ANKKA_MODEL_SCRIPT`) and the process never sees the key.
+   (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `ANKKA_MODEL_<NAME>_*`, `ANKKA_MODEL_DEFAULT`,
+   `ANKKA_MODEL_SCRIPT`), `withModel(name)` names one, and the process never sees a key.
 8. **Test with the kits, on any runner.** `EventSourcedTestKit.of(Cls, id)`, `KeyValueTestKit`,
    `WorkflowTestKit` (`call`, `runStep`, `runUntilEnd`, `resume`), `ViewTestKit`, `ConsumerTestKit`,
    `TimedActionTestKit`, `AgentTestKit.of(Cls, session, new ScriptedModel().expectToolCall(...).expectText(...))`,
@@ -72,7 +73,7 @@ skill holds what differs.
    sidecar on 9011, both loopback.
 10. **Deploy as a process-hosted service.** The descriptor sets `hosting: "process"` and `protocol: "1.0"`;
     the image holds only your process (`node:24-slim`, `node main.ts`); the platform adds the sidecar.
-    `ANTHROPIC_*`, `ANKKA_MODEL_*` and `ANKKA_DB_*` go to the sidecar, everything else to the process.
+    `ANTHROPIC_*`, `OPENAI_*`, `ANKKA_MODEL_*` and `ANKKA_DB_*` go to the sidecar, everything else to the process.
 11. **Several messages are one effect, and a graph is published by a graph consumer.** A consumer returns
     `this.effects.produceAll([{ payload, key: "k" }, …])` to publish several messages for one change, each
     under its own record key if it names one. To publish entities as a graph, extend `GraphConsumer<M>`
@@ -139,6 +140,7 @@ Open the one a task needs; each is one topic and stands alone.
 
 ### Build
 
+- `references/build/object-storage.md` — Keep photos, documents and exports in a service's buckets — put, get, list, stat and delete by name, sign a URL a browser uploads or downloads with, give a public address, and run the same code with no object store.
 - `references/build/calling-services.md` — Call another service's routes as your own service — from an endpoint, a workflow step, a consumer, a timed action or an agent's tool, in Scala, Python, TypeScript or Rust — so that service's access rules can admit yours by name.
 - `references/build/graph.md` — Publish a service's entities as nodes and edges with a graph consumer, which writes versioned graph deltas to a topic for a graph database to follow, with no key, version or JSON written by hand.
 - `references/build/serialization.md` — How ankka encodes state, events, arguments and messages as JSON under a named manifest, what the JSON looks like in every language, and how to change a stored type without breaking a journal.

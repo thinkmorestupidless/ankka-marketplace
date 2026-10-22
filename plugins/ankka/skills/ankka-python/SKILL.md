@@ -46,9 +46,10 @@ skill holds what differs.
 6. **Steps and agents run in the sidecar's engines.** A step may be `async`; the sidecar journals its
    transition. Workflow settings the engine enforces (timeouts, `Recovery(max_retries, failover_to)`)
    are declared on the class so discovery can carry them. An agent's `tools` and `guardrails` are class
-   attributes named in the effect; `memory(False)` for one-shot; `with_model("anthropic" | "scripted")`;
-   the model is configured on the sidecar through `ANTHROPIC_API_KEY`, `ANKKA_MODEL_NAME` or
-   `ANKKA_MODEL_SCRIPT` in the descriptor's `env`, and the process never sees the key.
+   attributes named in the effect; `memory(False)` for one-shot; `with_model(name)` names a provider the
+   sidecar has; providers are configured on the sidecar in the descriptor's `env` (`ANTHROPIC_API_KEY`,
+   `OPENAI_API_KEY`, `ANKKA_MODEL_<NAME>_*` for any other, `ANKKA_MODEL_DEFAULT`, `ANKKA_MODEL_SCRIPT`),
+   and the process never sees a key.
 7. **Views in Python answer `get` and `all` only.** SQL conditions over rows are a Scala service's.
    `ViewTestKit`, `ConsumerTestKit`, `WorkflowTestKit`, `TimedActionTestKit`, `EventSourcedTestKit` and
    `KeyValueTestKit` run one component with no sidecar; the integration testkit runs the real sidecar
@@ -59,7 +60,7 @@ skill holds what differs.
    9011, both loopback.
 9. **Deploy as a process-hosted service.** The descriptor sets `hosting: "process"` and the protocol
    version the SDK speaks; the image holds only your process; the platform adds the sidecar at the
-   platform's version. Environment is split by name: `ANTHROPIC_*`, `ANKKA_MODEL_*` and `ANKKA_DB_*` go to
+   platform's version. Environment is split by name: `ANTHROPIC_*`, `OPENAI_*`, `ANKKA_MODEL_*` and `ANKKA_DB_*` go to
    the sidecar, everything else to the process. A topic-sourced view or producing consumer needs
    `ANKKA_KAFKA_BOOTSTRAP_SERVERS` or the sidecar refuses to start, naming the component.
 10. **Several messages are one effect, and a graph is published by a graph consumer.** A consumer returns
@@ -125,6 +126,7 @@ Open the one a task needs; each is one topic and stands alone.
 
 ### Build
 
+- `references/build/object-storage.md` — Keep photos, documents and exports in a service's buckets — put, get, list, stat and delete by name, sign a URL a browser uploads or downloads with, give a public address, and run the same code with no object store.
 - `references/build/autonomous-agents.md` — Write an autonomous agent in Scala or Python — a task type with a typed result and rules, an agent that accepts it, running and reading tasks, watching an instance over server-sent events, and testing with a scripted model.
 - `references/build/calling-services.md` — Call another service's routes as your own service — from an endpoint, a workflow step, a consumer, a timed action or an agent's tool, in Scala, Python, TypeScript or Rust — so that service's access rules can admit yours by name.
 - `references/build/graph.md` — Publish a service's entities as nodes and edges with a graph consumer, which writes versioned graph deltas to a topic for a graph database to follow, with no key, version or JSON written by hand.
