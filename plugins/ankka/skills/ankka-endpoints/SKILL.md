@@ -1,6 +1,6 @@
 ---
 name: ankka-endpoints
-description: Write, change or test an ankka HTTP endpoint in Scala, Python, TypeScript or Rust, or a gRPC endpoint in Scala — routes and path templates, typed path parameters and bodies, response encoding, error codes and HttpProblem, query parameters and headers from the request, the ACL (DenyAll, AllowAll, AllowIf, Authenticate), server-sent events, .proto service definitions, gRPC streams and statuses, reflection, calling entities, workflows, agents, views and other services from a handler, and an MCP endpoint serving a service's commands, queries and routes as tools, with client keys and brokered sign-in. Use when the task names an endpoint, a route, a REST API, gRPC, a .proto file, an ACL, authentication of callers, a 4xx status or gRPC status, SSE, HttpServer, GrpcServer, GrpcClients, EndpointClients, an MCP endpoint, a tool, or a client key.
+description: Write, change or test an ankka HTTP endpoint in Scala, Java, Kotlin, Python, TypeScript, Go or Rust, or a gRPC endpoint in Scala or Java — routes and path templates, typed path parameters and bodies, response encoding, error codes and HttpProblem, query parameters and headers from the request, the ACL (DenyAll, AllowAll, AllowIf, Authenticate), server-sent events, .proto service definitions, gRPC streams and statuses, reflection, calling entities, workflows, agents, views and other services from a handler, and an MCP endpoint serving a service's commands, queries and routes as tools, with client keys and brokered sign-in. Use when the task names an endpoint, a route, a REST API, gRPC, a .proto file, an ACL, authentication of callers, a 4xx status or gRPC status, SSE, HttpServer, GrpcServer, GrpcClients, EndpointClients, an MCP endpoint, a tool, or a client key.
 ---
 
 # ankka HTTP endpoints
@@ -53,9 +53,9 @@ an ACL. Exposing a service changes who can *reach* an endpoint, never who is *al
    `clients.awaitEnd(id, Companion, timeout)` serves through `sseEvents` as a heartbeat then one end
    event, so it outlasts the idle timeout. A workflow that failed answers 424 with its step and reason in
    the problem's `details`.
-10. **In Python and TypeScript the process never binds a port.** The sidecar serves the declared routes, applies
+10. **In Python, TypeScript and Go the process never binds a port.** The sidecar serves the declared routes, applies
     the ACL and forwards. In Python pass `self.request.metadata` with `with_metadata` so the handler's calls
-    appear under the request's trace; in TypeScript `this.client` is already scoped to the request. `Acl.AUTHENTICATED` answers 503 for now.
+    appear under the request's trace; in TypeScript `this.client` is already scoped to the request; in Go the handler's `ctx` carries it. `Acl.AUTHENTICATED` answers 503 for now.
 
 ## Before writing an endpoint
 
@@ -78,6 +78,51 @@ after a route replaces the endpoint's for it. A handler answers `Result<R, HttpP
 value (`Done` and `()` answer 204) or a `Response`; a `CommandError` from `request.client()` becomes its
 status with `?`. The module never binds a port, and no route streams: a module answers every request whole.
 `EndpointTestKit::<E>::with_service(build())` tests the routes against the service's entities in memory.
+
+## Java differences
+
+An endpoint is a class extending `HttpEndpoint` with a no-argument constructor and a required `acl()`:
+`Acl.allowAll()`, `denyAll()`, `allowIf(request -> ...)`, `authenticate(request -> ...)`,
+`allowCallers("svc", ...)`, `clientKeys()`, `oidc()`, or `anyOf(...)`. Routes are annotated methods whose
+string is the template: `@Get("/carts/{cartId}") public Cart get(String cartId)`, `@Post`, `@Put`,
+`@Patch`, `@Delete`; path parameters bind by parameter name (compile with `-parameters`) or `@Path("name")`,
+and `@Body`, `@QueryParam` and `@Header` read the rest. `@Sse` returns a `Flow.Publisher<SseEvent>` or a
+`Stream<SseEvent>`; `@Socket` takes a `WebSocket`; `@StreamBody` takes a `StreamedBody`. The return value is
+encoded as the reply (`Done` answers 204); `throw new ProblemException(Problem.notFound(msg))` answers a
+status, and a `CommandException` from a call answers with the handler's problem. `request()`,
+`principal()`, `caller()`, `componentClient()`, `viewClient()`, `services()`, `timers()`, `secrets()` and
+`storage()` are the endpoint's own. Calls name handlers by method reference, never a lambda. Register with
+`withEndpoint(Cls.class)`; an MCP endpoint extends `McpEndpoint`, declares tools in its constructor
+(`tool("get_cart").describedAs(...).query(ShoppingCart::getCart, "cartId")`, or `.arguments(Args.class)
+.handle(args -> ...)`) and registers with `withMcpEndpoint`. A gRPC endpoint extends `GrpcEndpoint` over
+grpc-java's generated stubs. `AnkkaTestKit.start(Main.service())` with `http()` and `httpClient()` tests
+the routes against the whole service.
+
+## Kotlin differences
+
+The Java endpoint, or routes declared in code: `class CartEndpoint : HttpEndpoint(), RouteRegistrar` with
+`override fun routes() = routes { get("/carts/{cartId}") { ... path("cartId") ... };
+post<LineItem>("/carts/{cartId}/items") { item -> ... } }`. Each block is a suspending handler on the
+request's virtual thread, so `invokeSuspending()` waits without holding a thread; do not switch
+dispatcher inside it, because the request context is a thread-local of that thread. Read optional parts of
+the request with `request.queryOrNull(name)`, `headerOrNull(name)` and `principalOrNull`. An MCP tool's
+handler is `handling<Args> { args -> ... }`. `ankkaTestKit(service()) { ... }` tests the whole service.
+
+## Go differences
+
+An endpoint is `ankka.NewEndpoint(prefix, acl, routes...)`, the ACL positional and required (a nil one is
+refused at registration): `ankka.AllowAll()`, `DenyAll()`, `Authenticate(ankka.Issuer("name"))`,
+`AllowIf(ankka.ServiceNamed("x"), ankka.Internet(), …)`, `AnyOf(…)`. Routes are `ankka.Get[R](template,
+f)` and `ankka.Delete`, `f` being `func(ctx, *ankka.Request) (R, error)`, and `ankka.Post[B, R]`, `Put`,
+`Patch`, whose `f` also takes the decoded body; `.ACL(acl)` on a route replaces the endpoint's for it.
+`req.Param("cartId")`, `req.Query`, `req.Header(name)`, `req.Principal` (claims by name). `ankka.Done`
+answers 204, a string `text/plain`, anything else its codec's JSON; `&ankka.HttpProblem{Status, Message}`
+returned as the error sets a status, and a `*ankka.RefusalError` from `ankka.Invoke[R](ctx, componentID, id,
+wire, input)` answers its code's status when returned as it is. `ankka.SSE(template, f)` streams an
+`iter.Seq2[string, error]`, `ankka.SSEEvents` named events, `ankka.SocketRoute` a WebSocket; an MCP
+endpoint is `ankka.NewMcpEndpoint(path, acl, ankka.McpTool(…), ankka.McpCommandRef(…))`. The process never
+binds a port. `testkit.Endpoint(API, Entity)` tests the routes against the components in memory
+(`kit.Post(ctx, path, body)`, `testkit.JSON[T](resp)`).
 
 ## Testing
 
@@ -119,11 +164,11 @@ Open the one a task needs; each is one topic and stands alone.
 - `references/build/object-storage.md` — Keep photos, documents and exports in a service's buckets — put, get, list, stat and delete by name, sign a URL a browser uploads or downloads with, give a public address, and run the same code with no object store.
 - `references/build/streaming.md` — Stream an agent's reply token by token to a caller and over HTTP as server-sent events, and know what streaming changes about guardrails and sessions.
 - `references/build/mcp-endpoints.md` — Serve a service's commands, queries and routes as tools to any MCP client — declaring tools in each language, who may call them, client keys issued by the service, what a client that signs in is told, and brokered sign-in.
-- `references/build/http-endpoints.md` — Expose a service over HTTP — routes, typed path parameters and bodies, responses, errors, query parameters and headers, access control and server-sent events — in Scala, Python or TypeScript.
-- `references/build/calling-services.md` — Call another service's routes as your own service — from an endpoint, a workflow step, a consumer, a timed action or an agent's tool, in Scala, Python, TypeScript or Rust — so that service's access rules can admit yours by name.
+- `references/build/http-endpoints.md` — Expose a service over HTTP — routes, typed path parameters and bodies, responses, errors, query parameters and headers, access control and server-sent events — in Scala, Java, Kotlin, Python or TypeScript.
+- `references/build/calling-services.md` — Call another service's routes as your own service — from an endpoint, a workflow step, a consumer, a timed action or an agent's tool, in any of the six languages — so that service's access rules can admit yours by name.
 - `references/build/grpc-endpoints.md` — Serve a .proto service definition from a Scala service — every kind of method, access control, statuses, streams, reflection, calling another service's gRPC endpoint, and testing it.
 - `references/build/component-client.md` — Call entities, workflows and agents through the component client — blocking or asynchronous, with typed refusals and timeouts — and query views through the view client.
-- `references/build/testing.md` — Test ankka components at two levels in Scala, Python, TypeScript and Rust, with unit test kits that run one component and nothing else, integration test kits that run the whole service against a real database, and scripted models.
+- `references/build/testing.md` — Test ankka components at two levels in every language, with unit test kits that run one component and nothing else, integration test kits that run the whole service against a real database, and scripted models.
 
 ### Run and deploy
 

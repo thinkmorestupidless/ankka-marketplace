@@ -46,6 +46,7 @@ Run the project's own tests first; a service whose tests fail is not inspected.
 | Scala | `sbt test` | `sbt schema`, `docker compose up -d`, then `sbt run` (HTTP on 9000) |
 | Python | `uv run pytest` | `docker compose up -d` (Postgres and the sidecar), then the process: `uv run python -m <module>.main` |
 | TypeScript | `npm test` | `docker compose up -d`, then `npm start` |
+| Go | `go vet ./...`, `go test ./...`, then `ANKKA_SLOW=1 go test ./...` | `docker compose up -d`, then `go run .` |
 | Rust | `cargo test` | `cargo module`, then `docker compose up -d runtime` |
 
 Run the service in the background and keep its output. Then call `list_local_services`: the service must
@@ -146,7 +147,7 @@ Open the one a task needs; each is one topic and stands alone.
 
 ### Build
 
-- `references/build/testing.md` — Test ankka components at two levels in Scala, Python, TypeScript and Rust, with unit test kits that run one component and nothing else, integration test kits that run the whole service against a real database, and scripted models.
+- `references/build/testing.md` — Test ankka components at two levels in every language, with unit test kits that run one component and nothing else, integration test kits that run the whole service against a real database, and scripted models.
 
 ### Run and deploy
 

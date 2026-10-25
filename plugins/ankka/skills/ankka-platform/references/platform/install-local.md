@@ -12,6 +12,13 @@ The local platform is the same platform a cloud cluster runs, with three local c
 into the node rather than pulled from a registry, certificates come from a certificate authority created
 inside the cluster, and the base domain resolves to `127.0.0.1`.
 
+Inside the cluster, every name under the base domain resolves to the gateway instead, on the same port
+as on your machine. A service can therefore call another at its public hostname, such as
+`https://cart-checkout.127.0.0.1.sslip.io:8443`, and the call goes through the gateway with the same
+routes and certificates a browser meets. The deploy script adds this to the cluster's DNS, CoreDNS, with
+a stable `ankka-gateway` Service in `envoy-gateway-system` for the names to resolve to. A cloud
+installation's domain resolves publicly to its load balancer and needs neither.
+
 ## Prerequisites
 
 - Docker, with enough memory for several JVMs; 8 GB for Docker is comfortable.
@@ -46,6 +53,15 @@ stores the policy and ignores it, the script stops with:
 refusing to deploy: this cluster accepted a NetworkPolicy and did not enforce it; ankka needs a
 network that does (kind 0.24 or later does; see docs/platform/install-local.md).
 ```
+
+On kind, a cluster that passed this probe before can fail it later: kind's network, kindnet, stops
+enforcing new policies once its informers have died of API timeouts, which the load of a first install
+can cause. The script restarts kindnet once and probes again before it refuses; by hand, that is
+`kubectl -n kube-system rollout restart daemonset/kindnet`.
+
+A first run also pulls every image the platform's databases, broker and identity provider need, so its
+waits are long, up to ten minutes for a database. If a wait still runs out, run the script again once the
+cluster has caught up: every step is idempotent.
 
 ## Deploy the platform
 

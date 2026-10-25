@@ -1,6 +1,6 @@
 # Workflows
 
-> Build a durable multi-step process in Scala or Python — commands, steps, transitions, pauses, timeouts, retries and compensation — that resumes where it stopped after a crash.
+> Build a durable multi-step process in Scala, Java, Kotlin, Python or TypeScript — commands, steps, transitions, pauses, timeouts, retries and compensation — that resumes where it stopped after a crash.
 
 Source: https://docs.ankka.cloud/build/workflows/
 A workflow is a durable, multi-step process. Each instance has an id, a state of your own type, and a
@@ -115,7 +115,7 @@ Ankka.service
   .start()
 ```
 
-## One workflow, three languages
+## One workflow, in every language
 
 The shopping cart's checkout is the same durable process in each SDK: reserve what the cart holds,
 charge, and check the cart out — or compensate. A workflow class holds a state type, `command` and
@@ -154,7 +154,7 @@ final class CheckoutWorkflow(context: WorkflowContext) extends Workflow[Checkout
   def reserveStep: StepEffect =
     // A client call from a step: what the cart holds.
     val total = cart.call(ShoppingCartEntity.totalQuantity).invoke()
-    val next =
+    val next  =
       if currentState.mode == "pause" then CheckoutWorkflow.waitForTimeout
       else CheckoutWorkflow.charge
     stepEffects
@@ -329,14 +329,91 @@ export class CheckoutWorkflow extends Workflow<Checkout> {
 }
 ```
 
+**Go**
+
+```go
+// Checkout is a checkout's state, in the Scala reference's shape: the id, the mode it was started
+// in and where it has got to.
+type Checkout struct {
+	ID     string `json:"id"`
+	Mode   string `json:"mode"`
+	Status string `json:"status"`
+}
+
+var errDeclined = errors.New("payment declined")
+
+func step(s Checkout) ankka.StepBuilder[Checkout] { return ankka.StepUpdate(s) }
+
+// CheckoutFlow is a checkout as a durable multi-step process: reserve, then charge, or compensate.
+// mode is ok, fail (the charge is declined and compensated), pause (a pause before charging),
+// abort (declined; the compensation records it and fails the workflow), drop (declined; the
+// compensation fails the workflow and records nothing) or doomed (declined, and the compensation
+// fails too, so the workflow fails).
+var CheckoutFlow = ankka.Workflow[Checkout]("checkout", func(id string) Checkout {
+	return Checkout{ID: id, Status: "new"}
+},
+	ankka.WorkflowCommand("start", func(_ context.Context, s Checkout, mode string) (ankka.WorkflowEffect[Checkout, string], error) {
+		if s.Status != "new" {
+			return ankka.WorkflowEffect[Checkout, string]{}, ankka.Refuse(ankka.Conflict, "already started")
+		}
+		s.Status, s.Mode = "reserving", mode
+		return ankka.WorkflowUpdate[Checkout, string](s).ThenTransitionTo("reserve", nil).ThenReplyValue("started"), nil
+	}),
+	ankka.Query("status", func(_ context.Context, s Checkout, _ ankka.Unit) (ankka.ReadOnlyEffect[string], error) {
+		return ankka.Reply(s.Status), nil
+	}),
+	ankka.Step("reserve", func(ctx context.Context, s Checkout, _ ankka.Unit) (ankka.StepEffect[Checkout], error) {
+		// A client call from a step: what the cart holds.
+		if _, err := ankka.Invoke[int](ctx, cart.ComponentID, s.ID, "total-quantity", ankka.Unit{}); err != nil {
+			return ankka.StepEffect[Checkout]{}, err
+		}
+		next := "charge"
+		if s.Mode == "pause" {
+			next = "wait"
+		}
+		s.Status = "reserved"
+		return step(s).ThenTransitionTo(next, nil), nil
+	}),
+	ankka.Step("wait", func(_ context.Context, s Checkout, _ ankka.Unit) (ankka.StepEffect[Checkout], error) {
+		s.Status = "waiting"
+		return step(s).ThenPause(ankka.PauseOptions{After: 1500 * time.Millisecond, OnTimeout: "charge"}), nil
+	}),
+	ankka.Step("charge", func(_ context.Context, s Checkout, _ ankka.Unit) (ankka.StepEffect[Checkout], error) {
+		if slices.Contains([]string{"fail", "abort", "drop", "doomed"}, s.Mode) {
+			return ankka.StepEffect[Checkout]{}, errDeclined
+		}
+		s.Status = "charged"
+		return step(s).ThenEnd(), nil
+	}),
+	ankka.Step("compensate", func(_ context.Context, s Checkout, _ ankka.Unit) (ankka.StepEffect[Checkout], error) {
+		switch s.Mode {
+		case "abort":
+			s.Status = "aborted"
+			return step(s).ThenFail(ankka.WorkflowFailed, "payment declined"), nil
+		case "drop":
+			return ankka.FailWorkflow[Checkout](ankka.WorkflowFailed, "payment declined"), nil
+		case "doomed":
+			return ankka.StepEffect[Checkout]{}, errors.New("compensation failed too")
+		}
+		s.Status = "compensated"
+		return step(s).ThenEnd(), nil
+	}),
+	ankka.StateCodec(ankka.CodecFor[Checkout](ankka.Manifest("checkout"))),
+	ankka.StepTimeout(10*time.Second),
+	ankka.ForStep("charge", ankka.StepRecovery(ankka.Recovery{MaxRetries: 1, FailoverTo: "compensate"})),
+)
+```
+
 A Scala step names its successor with the companion's step handle, which carries the wire name; Python
 and TypeScript name it by the wire name itself, `then_transition_to("charge")` and
-`thenTransitionTo("charge")`, passing an input as a further argument when the step takes one. In every
+`thenTransitionTo("charge")`, Java and Kotlin name it by a method reference to the `@Step` method,
+`thenTransitionTo(Checkout::charge)`, and Go likewise by name, `ThenTransitionTo("charge", input)`; each passes an input as a further argument when the step takes one. In every
 case the transition is journalled and the runtime runs one step at a time.
 
 Steps may be asynchronous. In Python and TypeScript they are `async` and call other components through
-the client; in Scala a step is ordinary blocking code on a virtual thread, so `invoke` inside a step
-costs nothing but the wait.
+the client; in Scala, Java and Kotlin a step is ordinary blocking code on a virtual thread, so `invoke` inside a step
+costs nothing but the wait. A Go step is a plain function given the handler's `context.Context`, and
+calls other components with it; a returned error is a step that failed, which its recovery handles.
 
 ## What a command can do
 
@@ -414,6 +491,13 @@ static readonly settings = workflowSettings({
 })
 ```
 
+**Go**
+
+```go
+ankka.StepTimeout(10*time.Second),
+ankka.ForStep("charge", ankka.StepRecovery(ankka.Recovery{MaxRetries: 1, FailoverTo: "compensate"})),
+```
+
 | Setting | Default | Meaning |
 |---|---|---|
 | `timeout` | none | A ceiling on the whole workflow, measured from its start. When it passes, the workflow fails. |
@@ -424,7 +508,8 @@ static readonly settings = workflowSettings({
 
 A recovery strategy is a number of retries and, optionally, a step to fail over to when they are used up:
 `RecoverStrategy.maxRetries(1).failoverTo(TransferWorkflow.compensate)` in Scala,
-`Recovery(max_retries=1, failover_to="compensate")` in Python. Without a failover step, a step that
+`Recovery(max_retries=1, failover_to="compensate")` in Python,
+`ankka.ForStep("charge", ankka.StepRecovery(ankka.Recovery{MaxRetries: 1, FailoverTo: "compensate"}))` in Go. Without a failover step, a step that
 exhausts its retries fails the workflow.
 
 **Retries default to zero.** The runtime cannot know whether a step is safe to run twice, and a step that
@@ -441,6 +526,14 @@ A step that has to wait for a person or another system ends with `thenPause()`. 
 until a command transitions it. With `thenPause(after, onTimeout)` the runtime transitions it to
 `onTimeout` if nothing else has by then, which is how a workflow gives up on an approval that never
 comes. The Python checkout's `wait` step pauses and then resumes at `charge` on its own.
+
+A pause with a deadline outlives the instance that paused. The deadline is journalled with the pause and
+kept as a timer in the service's database, under the name `ankka-pause-<component id>-<workflow id>`, so
+the workflow moves to `onTimeout` on time even when nothing else reaches it: after it was removed from
+memory for being idle, after a restart and across a redeployment. Every service with a workflow runs the
+timer sweeper for this, whether or not it registers `TimerRuntime` itself. A workflow that was not in
+memory resumes up to one poll of the sweeper after its deadline, a second by default. A command that ends
+the pause first removes its timer, and a deadline that is no longer the workflow's does nothing.
 
 ## Queries while a step runs
 
@@ -521,6 +614,54 @@ checkOutAndWait: post("/{cartId}/checkouts/wait", s.string, Checkout, (ep: Shopp
 ),
 ```
 
+**Java**
+
+```java
+// Starts a checkout and answers with how it ended, as one request; a failed one is 424.
+@Post("/conformance/checkout-await/{id}")
+public String checkoutAwait(String id, @Body String mode) {
+  try {
+    return componentClient()
+        .forWorkflow(id)
+        .callThenAwaitEnd(Checkout::start, Duration.ofSeconds(30))
+        .invoke(mode)
+        .status();
+  } catch (CommandException failed) {
+    var end = failed.workflowFailure();
+    if (end.isEmpty()) throw failed;
+    throw new ProblemException(
+        new Problem(424, "", end.get().step().orElse("") + ": " + end.get().reason()));
+  }
+}
+```
+
+**Kotlin**
+
+```kotlin
+// Starts a checkout and answers with how it ended, as one request; a failed one is 424.
+@Post("/conformance/checkout-await/{id}")
+fun checkoutAwait(id: String, @Body mode: String): String =
+    try {
+        componentClient().forWorkflow(id).callThenAwaitEnd(Checkout::start, Duration.ofSeconds(30)).invoke(mode).status
+    } catch (failed: CommandException) {
+        val end = failed.workflowFailureOrNull ?: throw failed
+        throw ProblemException(Problem(424, "", "${end.step.orNull() ?: ""}: ${end.reason}"))
+    }
+```
+
+**Go**
+
+```go
+// Starts a checkout and answers with how it ended, as one request; a failed one is 424.
+ankka.Post("/checkout-await/{id}", func(ctx context.Context, req *ankka.Request, mode string) (string, error) {
+	end, err := ankka.SendAndAwait[Checkout](ctx, "checkout", req.Param("id"), "start", mode, 30*time.Second)
+	if r, ok := ankka.AsRefusal(err); ok && r.Code == ankka.WorkflowFailed {
+		return "", &ankka.HttpProblem{Status: 424, Message: r.Details["step"] + ": " + r.Details["reason"]}
+	}
+	return end.Status, err
+}),
+```
+
 The command's own reply is not kept: a caller that wants both sends the command, then waits. A command the
 workflow refuses is answered with that refusal at once, and no wait begins.
 
@@ -570,7 +711,8 @@ checkoutEnd: get("/{cartId}/checkouts/end", Checkout, (ep: ShoppingCartEndpoint,
 A workflow that has already ended is answered at once, from what was recorded. `WorkflowFailed` is neither
 a refusal of the call nor a fault: the call was answered, and what it waited for failed. In Scala
 `WorkflowEnd.failure(error)` reads its step and reason; in Python they are `error.details["step"]` and
-`["reason"]`, and in TypeScript `error.details.step` and `.reason`. An endpoint answers it with HTTP 424.
+`["reason"]`, in TypeScript `error.details.step` and `.reason`, and in Java and Kotlin the
+`CommandException`'s `workflowFailure()` answers one whose `step()` and `reason()` say the same. An endpoint answers it with HTTP 424.
 
 ### The caller says how long it waits
 
@@ -640,6 +782,15 @@ async def checkout_events(self, cartId: str) -> AsyncIterator[str]:
 checkoutEvents: sse("/{cartId}/checkouts/events", async function* (ep: ShoppingCartEndpoint, req) {
   for await (const part of ep.client.of(CheckoutWorkflow, req.params.cartId).awaitEndParts<Checkout>(600_000)) yield awaitPartJson(part)
 }),
+```
+
+**Java**
+
+```java
+@Sse("/checkouts/{id}/end")
+public Flow.Publisher<SseEvent> end(String id) {
+  return componentClient().forWorkflow(id).awaitEndEvents(Checkout.class, Duration.ofSeconds(30));
+}
 ```
 
 A gateway in front of the service still bounds the response, as it bounds any stream through it; see

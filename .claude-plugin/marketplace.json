@@ -12,7 +12,7 @@
       "name": "ankka",
       "source": "./plugins/ankka",
       "description": "The ankka documentation as skills — design, entities, views and consumers, workflows, agents, endpoints, Python, deploying, the platform — and the ankka mcp server.",
-      "version": "0.13.0"
+      "version": "0.14.0"
     },
     {
       "name": "ankka-flow",
@@ -25,6 +25,12 @@
       "source": "./plugins/ankka-reasoning",
       "description": "The ankka-reasoning documentation as a skill — recording evidence, claims and beliefs as records that are never edited, asking why a belief changed or what was believed at a past time, markets and their resolutions, and reading the graph.",
       "version": "0.1.1"
+    },
+    {
+      "name": "pr-review",
+      "source": "./plugins/pr-review",
+      "description": "Code review as skills: the general checklist every pull request is checked against, then the checklist of each language the diff touches (Scala, Java, Kotlin, Go, Python, Rust, TypeScript); findings labelled by severity with a verdict. Needs nothing from ankka.",
+      "version": "0.14.0"
     },
     {
       "name": "satisfactory",

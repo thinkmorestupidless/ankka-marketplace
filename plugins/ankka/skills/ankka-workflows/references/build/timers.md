@@ -11,7 +11,9 @@ timer that calls a timed action handler, which calls the order entity.
 Timers are stored in the service's Postgres database, not in memory. A timer outlives the process that
 set it, a restart, and a redeployment. One instance of the service runs a sweeper, as a cluster
 singleton, that polls for due timers once a second and runs them. The poll interval bounds how late a
-timer can be, not how precisely it fires.
+timer can be, not how precisely it fires. A service with a workflow runs the sweeper even when it
+registers no `TimerRuntime`, because a paused workflow's deadline is a timer too
+([Workflows](workflows.md)).
 
 ## Delivery is at least once
 
@@ -80,6 +82,86 @@ export class Reminder extends TimedAction {
 }
 ```
 
+**Java**
+
+```java
+/** A timed action that records on the conformance entity it is given. */
+@ComponentId("reminder")
+public class Reminder extends TimedAction {
+
+  @Action("remind")
+  public TimedActionEffect remind(String id) {
+    record(id, "reminded");
+    return effects().done();
+  }
+
+  /** Records the due time it was run for, as the runtime told it. */
+  @Action("tick")
+  public TimedActionEffect tick(String id) {
+    record(id, "due:" + context().dueTime().toEpochMilli());
+    return effects().done();
+  }
+
+  private void record(String id, String what) {
+    context()
+        .componentClient()
+        .forEventSourcedEntity(id)
+        .call(ConformanceEntity::record)
+        .invoke(what);
+  }
+}
+```
+
+**Kotlin**
+
+```kotlin
+@ComponentId("reminder")
+class Reminder : TimedAction() {
+
+    @Action("remind")
+    fun remind(id: String): TimedActionEffect {
+        record(id, "reminded")
+        return effects { done() }
+    }
+
+    /** Records the due time it was run for, as the runtime told it. */
+    @Action("tick")
+    fun tick(id: String): TimedActionEffect {
+        record(id, "due:${context().dueTime().toEpochMilli()}")
+        return effects { done() }
+    }
+
+    private fun record(id: String, what: String) {
+        context().componentClient().forEventSourcedEntity(id).call(ConformanceEntity::record).invoke(what)
+    }
+}
+```
+
+**Go**
+
+```go
+// Reminder records on the conformance entity it is given the id of.
+var Reminder = ankka.TimedAction("reminder",
+	ankka.Action("remind", func(ctx context.Context, id string) (ankka.ActionEffect, error) {
+		if _, err := ankka.Invoke[string](ctx, "conformance", id, "record", "reminded"); err != nil {
+			return ankka.ActionEffect{}, err
+		}
+		return ankka.ActionDone(), nil
+	}),
+	// Records the due time it was run for, as the runtime told it.
+	ankka.Action("tick", func(ctx context.Context, id string) (ankka.ActionEffect, error) {
+		due := "undefined"
+		if t, ok := ankka.TimerFrom(ctx); ok && !t.Due.IsZero() {
+			due = fmt.Sprint(t.Due.UnixMilli())
+		}
+		if _, err := ankka.Invoke[string](ctx, "conformance", id, "record", "due:"+due); err != nil {
+			return ankka.ActionEffect{}, err
+		}
+		return ankka.ActionDone(), nil
+	}),
+)
+```
+
 The Scala handler reports success whatever the order's state was: an order that had already been
 confirmed has nothing to cancel, and that is not a failure. Its companion registers the handler:
 
@@ -92,23 +174,26 @@ object OrderTimers extends TimedAction.Companion[OrderTimers](ComponentId("order
 
 `handler("expire-order")(_.expireOrder)` registers a handler that takes one argument; a handler with no
 argument is registered the same way from a method with no parameters. The argument needs a `Serializer`
-in scope, exactly as a command's does, because it is stored with the timer. Python declares the same with
-`@action(name)` and TypeScript with `action(name, shape, run)` in `actions`.
+in scope, exactly as a command's does, because it is stored with the timer. Java and Kotlin declare the
+same with `@Action(name)` on a method of a `TimedAction`, Python with `@action(name)`, TypeScript with
+`action(name, shape, run)` in `actions`, and Go with `ankka.Action(name, run)` given to `ankka.TimedAction`.
 
-`done()` completes the timer; `error(message)` in Scala and `fail(message)` in Python and TypeScript fail
-it, so it is retried. An exception raised by the handler, or a process that cannot be reached, is retried
+`done()` completes the timer; `error(message)` in Scala, Java and Kotlin and `fail(message)` in Python and TypeScript
+(`ankka.ActionFail(code, message)` in Go) fail it, so it is retried. An exception raised by the handler, or a process that cannot be reached, is retried
 in the same way.
 
 What fired, and how many times it has already failed, reaches the handler differently: Scala's
-`TimedActionContext` carries `timerName` and `previousAttempts`, while Python, TypeScript and Rust read the
-metadata keys `ankka.timer` and `ankka.attempts`. In Scala the context also carries `timers`, the
+`TimedActionContext` and the Java and Kotlin `context()` carry `timerName` and `previousAttempts`, while Python, TypeScript and Rust read the
+metadata keys `ankka.timer` and `ankka.attempts`, and Go reads `Name` and `Attempts` from
+`ankka.TimerFrom(ctx)`. In Scala, Java and Kotlin the context also carries `timers`, the
 service's scheduler, so a handler can set what comes next under another name — a calendar schedule, which a
 recurring timer's fixed period does not express, is one timer per occurrence — and `clock`, the clock the
 sweeper fired it by, which a handler reads as now rather than `Instant.now()`, so that a test moving the
 sweeper's clock moves the handler's too.
 
-A handler is told the due time it is run for: `dueTime` on Scala's `TimedActionContext`, `due_time` in
-Python, `dueTime` in TypeScript and `ctx.due()` in Rust, all read from the metadata key `ankka.due`, which
+A handler is told the due time it is run for: `dueTime` on Scala's `TimedActionContext`, `dueTime()` on
+the Java and Kotlin context, `due_time` in
+Python, `dueTime` in TypeScript, `ctx.due()` in Rust and `ankka.TimerFrom(ctx)`'s `Due` in Go, all read from the metadata key `ankka.due`, which
 is milliseconds since the epoch. A retry is told the same due time as the attempt that failed, so the due
 time is a key to make a repeated run safe with: record the last due time handled, and a run for it again
 has nothing to do.
@@ -149,9 +234,40 @@ ctx.client().schedule("nudge-c1", Duration::of_hours(1), Reminder, None, "nudge"
 ctx.client().cancel("nudge-c1")?;
 ```
 
+**Java**
+
+```java
+@Post("/conformance/remind/{id}")
+public Done remind(String id) {
+  timers().schedule("remind-" + id, Duration.ofSeconds(1), Reminder::remind, id);
+  return Done.done();
+}
+```
+
+**Kotlin**
+
+```kotlin
+@Post("/conformance/remind/{id}")
+fun remind(id: String): Done {
+    timers().schedule("remind-$id", Duration.ofSeconds(1), Reminder::remind, id)
+    return Done.done()
+}
+```
+
+**Go**
+
+```go
+ankka.Post("/remind/{id}", func(ctx context.Context, req *ankka.Request, _ ankka.Unit) (ankka.Done, error) {
+	id := req.Param("id")
+	return ankka.Done{}, ankka.Schedule(ctx, "remind-"+id, time.Second, ankka.TimerTarget{ComponentID: "reminder", Handler: "remind"}, id)
+}),
+```
+
 Every SDK names the timer by an id of your choosing, and the handler that will run. Python names the
 timed action and handler by their wire names, `schedule(timer_id, delay, component_id, name, input)`;
-TypeScript passes the component and handler themselves, so the names come from their declarations.
+TypeScript passes the component and handler themselves, so the names come from their declarations; Java
+and Kotlin name the handler by a method reference (`Reminder::remind`), resolved to its wire name; Go
+names them in an `ankka.TimerTarget{ComponentID, Handler}`.
 
 Scheduling twice under one id replaces the earlier schedule, and cancelling a timer that does not exist
 is not an error. The timer lives in the database, so it fires even if the process that set it has
@@ -196,6 +312,47 @@ await client.timers.scheduleRecurring("sweep-carts", Duration.ZERO, Duration.ofH
 
 ```rust
 ctx.client().schedule_recurring("sweep-carts", Duration::of_seconds(0), Duration::of_hours(1), Cleanup, "sweep", ())?;
+```
+
+**Java**
+
+```java
+// A recurring timer: due at once, then every second.
+@Post("/conformance/recur/{id}")
+public Done recur(String id) {
+  timers()
+      .scheduleRecurring("recur-" + id, Duration.ZERO, Duration.ofSeconds(1), Reminder::tick, id);
+  return Done.done();
+}
+```
+
+**Kotlin**
+
+```kotlin
+// A recurring timer: due at once, then every second.
+@Post("/conformance/recur/{id}")
+fun recur(id: String): Done {
+    timers().scheduleRecurring("recur-$id", Duration.ZERO, Duration.ofSeconds(1), Reminder::tick, id)
+    return Done.done()
+}
+```
+
+**Go**
+
+```go
+// A recurring timer: due at once, then every second.
+ankka.Post("/recur/{id}", func(ctx context.Context, req *ankka.Request, _ ankka.Unit) (ankka.Done, error) {
+	id := req.Param("id")
+	return ankka.Done{}, ankka.ScheduleRecurring(ctx, "recur-"+id, 0, time.Second, tickTarget, id)
+}),
+// The same timer set again, with a delay a replacement would be first due after.
+ankka.Post("/recur/{id}/again", func(ctx context.Context, req *ankka.Request, _ ankka.Unit) (ankka.Done, error) {
+	id := req.Param("id")
+	return ankka.Done{}, ankka.ScheduleRecurring(ctx, "recur-"+id, 60*time.Second, time.Second, tickTarget, id)
+}),
+ankka.Post("/recur/{id}/cancel", func(ctx context.Context, req *ankka.Request, _ ankka.Unit) (ankka.Done, error) {
+	return ankka.Done{}, ankka.Cancel(ctx, "recur-"+req.Param("id"))
+}),
 ```
 
 A delay of zero is due at once. A period is from one millisecond to 36,500 days; any other is refused when

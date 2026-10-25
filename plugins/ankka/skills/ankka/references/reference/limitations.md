@@ -27,6 +27,17 @@ feature also says what that feature does not do.
   several installations write one entity and their states are merged.
 - **Only event sourced entities replicate.** A key value entity or a workflow declared replicated is
   refused when the service starts.
+- **A forwarded write is admitted only from an installation the home names.** The home of a replicated
+  entity admits a write forwarded from an installation in its own list of installations and refuses any
+  other, naming it. Admitting an installation of another organization, by granting it access as any
+  other caller is granted, is `ankka-replication`'s, not the platform's.
+- **The installation does not report erasure.** `GET /installation` reports its broker, its longest topic
+  retention and its backups; it states nothing about erasure, which the platform does not yet provide, so
+  a requirement that names erasure reads it as not stated.
+- **Only an event sourced entity's context carries a call's attribution.** An event sourced entity's
+  command and event contexts say who acted on a call and, for a forwarded write, which installation
+  forwarded it. A workflow's or key value entity's context does not yet expose the attribution of a
+  call.
 - **No autoscaling.** `minInstances` is a fixed instance count. `maxInstances` and `targetCpuPercent` are
   validated and stored, and nothing acts on them. Scaling is a change to the descriptor.
 - **A command in flight while its entity moves can time out.** During a rollout, a scale-in or a failure,
@@ -92,11 +103,11 @@ feature also says what that feature does not do.
   length, so a body of unknown length is read first or uploaded through a signed URL.
 - **A module's objects are at most 4,000,000 bytes.** A Rust service's put and get carry the whole object
   through the runtime; a larger one goes through a signed URL.
-- **A keep through a signed URL on a developer's machine is at most 4,000,000 bytes for Python and
-  TypeScript**, since the directory store's address is served through the platform's program beside the
+- **A keep through a signed URL on a developer's machine is at most 4,000,000 bytes for Python,
+  TypeScript and Go**, since the directory store's address is served through the platform's program beside the
   process. A deployed service's signed URLs are the store's, with no such bound.
-- **A Python or TypeScript service's routes read their bodies whole.** Only a Scala endpoint streams a
-  request or a response; the other languages send large objects through signed URLs.
+- **A Python, TypeScript or Go service's routes read their bodies whole.** Only a Scala, Java or Kotlin
+  endpoint streams a request or a response; the other languages send large objects through signed URLs.
 - **A signed URL spans at most seven days.**
 - **A gRPC endpoint has no storage client.**
 - **A supplied bucket is checked on its first call**, not when the service starts: a wrong endpoint or key
@@ -169,7 +180,7 @@ feature also says what that feature does not do.
   provisioned for a service's users, and the platform administers none: the identity provider is the
   installation's or the service's to run. Only signed JSON Web Tokens whose issuer publishes its keys are
   verified, every listed issuer must name an audience, and a route accepts any of the service's issuers.
-- **Only a Scala service calls another service's gRPC endpoint.** A Python or TypeScript service calls
+- **Only a Scala, Java or Kotlin service calls another service's gRPC endpoint.** A Python, TypeScript or Go service calls
   another service's HTTP routes as itself, through the runtime beside it, and is called over gRPC as any
   service is; it has no gRPC client of its own.
 - **Protection depends on the cluster enforcing network policy.** On a network plugin that accepts
@@ -241,7 +252,7 @@ feature also says what that feature does not do.
 - **`ankka services logs` is not a log store, and logs are never exported.** It reads what Kubernetes holds
   for each instance at the moment of asking: no search, no aggregation, no retention. Logs are for the
   installation's own agent to gather from standard output; a line a handler writes names its trace, so a log
-  store can join it. A process's own lines, in Python or TypeScript, carry no trace.
+  store can join it. A process's own lines, in Python, TypeScript or Go, carry no trace.
 - **The metrics endpoint is a window.** `/ankka/metrics` reports counts over the current span window, not
   totals since start; the exported metrics count since the instance started. The platform ships no
   dashboards or alerts.
@@ -257,8 +268,8 @@ feature also says what that feature does not do.
 - **A keyed view has one writer.** It handles one change at a time, across every source and every
   instance, so its throughput does not grow with the service's instances.
 - **Reads other than declared queries have no timeout in the database.** A declared query is ended by the
-  database when the service's ask timeout runs out; `get`, `all` and, in Scala, `where`, `ordered` and
-  `count` stop the caller waiting and leave the statement to finish.
+  database when the service's ask timeout runs out; `get`, `all`, `count` and, in Scala, `where` and
+  `ordered` stop the caller waiting and leave the statement to finish.
 - **A view's version may be raised only once every instance knows versions of views that read
   entities.** An instance from before cannot be told to stop writing during the rebuild. See
   [Upgrading](../deploy/upgrading.md).
@@ -333,6 +344,12 @@ feature also says what that feature does not do.
   workflow's end as an unknown handler, and the caller is told so; a process beside a runtime before
   protocol 1.18 is refused when it waits. During a rolling update, a wait can fail this way until every
   instance is at the release.
+- **A paused workflow's deadline needs the sweeper and the workflow at the same release.** An instance
+  from before durable pauses drops a pause's timer when it holds the sweeper, and answers a wake as an
+  unknown handler when it hosts the workflow, which the sweeper retries. During a rolling update a paused
+  workflow that is not in memory can therefore resume only when it is next called. A workflow whose id is
+  longer than about 1,000 bytes has no timer for its pause, since a timer's payload is at most 1,024
+  bytes; it resumes on time only while it stays in memory, and the service logs a warning.
 - **A socket carries text frames only.** A frame that is not text closes the socket `1003`, not text.
 - **The platform keeps nothing of a socket.** No frame is stored and nothing records who holds a socket
   open: presence, fan-out and catching a reconnecting client up are a service's own entities and
@@ -368,7 +385,7 @@ feature also says what that feature does not do.
 - **An autonomous agent's tools run at least once.** A tool whose result had not been recorded when a task's
   process stopped runs again when the task resumes. Write tools with side effects to tolerate a repeat.
 - **Blueprints are Scala only, and say nothing a step cannot.** Only a Scala service registers blueprints;
-  Python and TypeScript services, through the sidecar, are a later feature. A blueprint has no conditions,
+  Python, TypeScript and Go services, through the sidecar, are a later feature. A blueprint has no conditions,
   branches or loops of its own, and no branching search (several drafts scored and the weaker pruned):
   every repetition is inside a step and bounded by it, and a choice is a step's shape or a gather chosen
   by an earlier step's result. No step waits for a person as a pattern of its own; a person is reached
@@ -380,7 +397,7 @@ feature also says what that feature does not do.
 - **An attachment by reference is not fetched.** The model is shown the reference; a tool fetches it.
 - **The local console does not show autonomous agents.** Read a task's record, or watch an instance's
   notifications.
-- **Judgments are for Scala services' agents only.** Python, TypeScript and Rust services cannot declare a
+- **Judgments are for Scala services' agents only.** Java, Kotlin, Python, TypeScript, Rust and Go services cannot declare a
   question, ask for a judgment or use a judged guardrail. A workflow step, an endpoint or a consumer reaches
   one by calling an agent's judgment handler, or a blueprint's judge or critique step asks one; a handler
   cannot judge and then call the text model in one reply; make two calls. Guardrails, judged or not, see a message and a reply, never the tool calls a model
@@ -405,8 +422,8 @@ feature also says what that feature does not do.
   they reasoned with a tool's result for the rest of the turn, and never after: a turn that waits for a
   person to approve a tool goes on without it, and so does an autonomous agent's task after its instance
   restarts. The protocol accepts that, at some cost to the answer.
-- **A process names a configured provider, not a model.** A Python, TypeScript or Rust handler names one
-  of the providers the sidecar was configured with, each with one model; it cannot choose another model
+- **A process names a configured provider, not a model.** A Python, TypeScript, Rust or Go handler names
+  one of the providers the sidecar was configured with, each with one model; it cannot choose another model
   of the same provider for one interaction.
 - **MCP servers are reached over Streamable HTTP only.** There is no stdio or other transport, so a server
   that runs as a local program is reached through a small HTTP bridge. Only a server's tools are used —
@@ -431,14 +448,30 @@ feature also says what that feature does not do.
 
 ## SDKs and releases
 
-- **gRPC endpoints are for Scala services.** A Python, TypeScript or Rust service cannot declare one, and a
-  descriptor that declares gRPC with process or wasm hosting is refused.
+- **gRPC endpoints are for Scala and Java services.** A Kotlin service declares one through the Java SDK's
+  `GrpcEndpoint`, with grpc-java's generated stubs. A Python, TypeScript, Rust or Go service cannot declare one,
+  and a descriptor that declares gRPC with process or wasm hosting is refused.
 - **The local console does not call gRPC methods.** It lists them beside a service's routes; call them with
   `grpcurl` or a client generated from the service definition.
 
-- **The TypeScript SDK declares and calls autonomous agents but cannot script one in its unit testkit.**
-  Test one through a sidecar with `ANKKA_MODEL_SCRIPT`, as the Python SDK's integration testkit does.
-- **Four languages.** Services are written in Scala, Python, TypeScript or Rust. Another language needs an SDK, or a
+- **The TypeScript and Go SDKs declare and call autonomous agents but cannot script one in their unit
+  test kits.** Test one through a sidecar with `ANKKA_MODEL_SCRIPT`, as the Python SDK's integration
+  testkit does.
+- **The Java SDK cannot script a judgment.** Its test kits script a model (`TestModelProvider`) but not a
+  judgment provider, and a `JudgmentProvider` is only one `JudgmentProviders` builds, so a Java test of a
+  judgment or a judged guardrail needs Jev itself; nor do they hold an MCP server of their own, so a test of
+  an agent's MCP tools runs a server on loopback. Its codec reads records, sealed interfaces and enums by
+  reflection when the service starts; there is no annotation processor and no compile-time derivation,
+  and a codec is customised by handing `withSerializer` a serializer of your own, not by a given. A record
+  field of type `float`, `short`, `byte` or `char` is refused at start, naming the field, because the
+  encoding has no form for it; use `int`, `long` or `double`. A gRPC endpoint is written against
+  grpc-java's generated descriptors.
+- **The Kotlin SDK has no agent test kit of its own.** A Kotlin agent is tested with the Java SDK's
+  `AgentTestKit` and `TestModelProvider`, so a judgment cannot be scripted in Kotlin either. It runs on the JVM only, with no Kotlin multiplatform or Kotlin/Native build. Data
+  classes are read by the Java SDK's codec through Kotlin reflection, not by `kotlinx.serialization`. A
+  declared query's `Flow` (`askFlow`) is cold and ends with the query's last row; a watch is the Java
+  SDK's `ViewWatch`, not a `Flow`. gRPC uses grpc-java's stubs; there are no Kotlin coroutine stubs.
+- **Seven languages.** Services are written in Scala, Java, Kotlin, Python, TypeScript, Rust or Go. Another language needs an SDK, or a
   guest library for the WebAssembly mode, that passes the conformance suite; see
   [Adding a language SDK](../contributing/language-sdks.md).
 - **The CLI has native builds for macOS and Linux only.** There is no Windows executable, no Linux

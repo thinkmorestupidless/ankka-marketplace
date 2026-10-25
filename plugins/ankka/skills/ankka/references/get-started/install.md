@@ -1,14 +1,16 @@
 # Install the tools
 
-> Install what ankka needs on your machine, install the ankka CLI with Homebrew or from a release, and make the Scala libraries and the Python, TypeScript and Rust SDKs available to your projects.
+> Install what ankka needs on your machine, install the ankka CLI with Homebrew or from a release, and make the Scala libraries and the Java, Kotlin, Python, TypeScript, Go and Rust SDKs available to your projects.
 
 Source: https://docs.ankka.cloud/get-started/install/
 ankka is used through three things: libraries your service depends on, the `ankka` command-line tool,
 and a platform to deploy to. This page installs the first two. The third has its own page,
 [Install a local platform](../platform/install-local.md), and you need it only once you want to deploy.
 
-The CLI is installed with Homebrew, or unpacked from a release; the Python SDK comes from PyPI, the
-TypeScript SDK from npm and the Rust crate from crates.io. One piece is not yet packaged: the sidecar image that hosts a Python or TypeScript
+The CLI is installed with Homebrew, or unpacked from a release; the Scala libraries and the Java and
+Kotlin SDKs come from Maven Central, the Python SDK from PyPI, the TypeScript SDK from npm, the Go module
+from its own repository through the Go module proxy and the Rust crate from crates.io. One piece is not
+yet packaged: the sidecar image that hosts a Python, TypeScript or Go
 service is built from the repository,
 and this page says where that applies.
 
@@ -16,11 +18,12 @@ and this page says where that applies.
 
 | Tool | Needed for | Version |
 |---|---|---|
-| JDK | Scala services, the CLI (Homebrew installs its own), building the platform's images | 21 |
+| JDK | Scala, Java and Kotlin services, the CLI (Homebrew installs its own), building the platform's images | 21 |
 | [sbt](https://www.scala-sbt.org/) | Scala services, and `ankka init` for one | any recent 1.x |
 | Docker | running Postgres locally, integration tests, building images | any recent |
 | [uv](https://docs.astral.sh/uv/) and Python | Python services | Python 3.12 |
 | [Node.js](https://nodejs.org/) | TypeScript services | 22.22 or later; 24 recommended |
+| [Go](https://go.dev/) | Go services | 1.26 or later |
 | [rustup](https://rustup.rs/) and the `wasm32-unknown-unknown` target | Rust services | stable Rust, edition 2024 |
 | [kind](https://kind.sigs.k8s.io/) and `kubectl` | a local platform to deploy to | recent |
 | [just](https://github.com/casey/just) | optional shortcuts in the repository | any |
@@ -39,8 +42,9 @@ ankka version
 ```
 
 `brew upgrade ankka` moves to a newer release. `ankka init` needs `sbt` on the `PATH` for a Scala service,
-because it runs `sbt new` to expand the Scala template; a Python or TypeScript service, and every other
-command, works without it.
+because it runs `sbt new` to expand the Scala template; a service in any other language, and every other
+command, works without it. A Java project carries the Maven wrapper and a Kotlin project the Gradle
+wrapper, so neither needs a build tool installed.
 
 Anywhere else, releases after 0.6.4 carry the CLI as a single native executable for each platform, with
 no JVM to install: `linux-x64`, `linux-arm64`, `macos-arm64` and `macos-x64`, each on the
@@ -74,7 +78,7 @@ ankka version
 
 ## Get the repository
 
-The Python and TypeScript SDKs and the local platform are built from the ankka repository, and so is a CLI newer than
+The Python, TypeScript and Go SDKs and the local platform are built from the ankka repository, and so is a CLI newer than
 the last release:
 
 ```bash
@@ -109,6 +113,23 @@ sbt publishLocal                                     # the six, and the control 
 ```
 
 Run it again whenever you pull a newer version of the repository and want your projects to use it.
+
+## Make the Java and Kotlin SDKs available
+
+The Java SDK is three artifacts under `com.thinkmorestupidless`, built on the Scala libraries above:
+`ankka-java` (the SDK), `ankka-java-testkit` and `ankka-java-agent`. The Kotlin SDK is three more over
+them: `ankka-kotlin`, `ankka-kotlin-testkit` and `ankka-kotlin-agent`. All six are on Maven Central at
+every release, with the platform's version, and a project made by `ankka init --language java` or
+`--language kotlin` names that version in its `pom.xml` or `gradle.properties`. A Java or Kotlin service
+runs in the runtime's own JVM, so it needs no sidecar image.
+
+To use a Java SDK that is not released yet, publish it from a checkout into the local Maven repository,
+`~/.m2`, with the Scala libraries it is built on; the Kotlin SDK is a Gradle build in `sdks/kotlin`, whose
+README says how to build it against that publication:
+
+```bash
+sbt publishM2                                        # the Scala libraries and the Java SDK, into ~/.m2
+```
 
 ## Install the Python SDK
 
@@ -154,6 +175,26 @@ released yet, build it from a checkout of the repository instead: `npm ci && npm
 in `sdks/typescript`, then `npm install /path/to/ankka/sdks/typescript`. A TypeScript service needs the same
 `ankka-sidecar` image as a Python one, chosen the same way.
 
+## Install the Go SDK
+
+The Go SDK is the module [`github.com/thinkmorestupidless/ankka-go`](https://pkg.go.dev/github.com/thinkmorestupidless/ankka-go),
+published at every release with the platform's version and fetched through the Go module proxy. Add it to
+your own module, pinned to the version of the platform you deploy to:
+
+```bash
+go get github.com/thinkmorestupidless/ankka-go@v0.14.0
+```
+
+The test kits are the package `github.com/thinkmorestupidless/ankka-go/testkit` in the same module, so
+there is nothing more to add; its integration kit starts Postgres and the sidecar in containers, and its
+tests are skipped unless `ANKKA_SLOW=1` is set. Go 1.26 or later builds a service with the standard
+toolchain and no code generation, to one static executable with `CGO_ENABLED=0`. To use an SDK that is not
+released yet, point your module at a checkout of the repository instead:
+`go mod edit -replace github.com/thinkmorestupidless/ankka-go=/path/to/ankka/sdks/go`. A Go service needs the
+same `ankka-sidecar` image as a Python one, chosen the same way: `ANKKA_SIDECAR_IMAGE` when it is set, else
+the published image at the module's version, and `ankka-sidecar:latest` for a replaced module, which is
+version `0.0.0`.
+
 ## Install the Rust crate
 
 The Rust SDK is the crate [`ankka`](https://crates.io/crates/ankka) on crates.io, published at every release
@@ -166,7 +207,7 @@ cargo add ankka@0.8.0 serde --features serde/derive
 cargo add --dev ankka@0.8.0 --features testkit                 # the integration testkit, which needs Docker
 ```
 
-The runtime that loads a module is the same `ankka-sidecar` image a Python or TypeScript service runs
+The runtime that loads a module is the same `ankka-sidecar` image a Python, TypeScript or Go service runs
 beside, chosen the same way: the crate's integration testkit takes `ANKKA_SIDECAR_IMAGE`, else the published
 image at the crate's version. To use a crate that is not released yet, depend on it by path from a checkout
 of the repository, `ankka = { path = "/path/to/ankka/sdks/rust/ankka" }`; it is version `0.0.0` and starts
@@ -175,10 +216,14 @@ of the repository, `ankka = { path = "/path/to/ankka/sdks/rust/ankka" }`; it is 
 ## What you have now
 
 - `ankka` on your `PATH`, for creating services, running the local console and operating a platform.
-- The Scala libraries resolvable by sbt, or the Python or TypeScript SDK or the Rust crate in your project.
-- For Python, TypeScript or Rust, the `ankka-sidecar` image, pulled from `ghcr.io/thinkmorestupidless/ankka-sidecar`.
+- The Scala libraries resolvable by sbt, the Java or Kotlin SDK resolvable by Maven or Gradle, or the
+  Python, TypeScript or Go SDK or the Rust crate in your project.
+- For Python, TypeScript, Go or Rust, the `ankka-sidecar` image, pulled from `ghcr.io/thinkmorestupidless/ankka-sidecar`.
 
 Continue with [your first service in Scala](first-service-scala.md),
+[your first service in Java](first-service-java.md),
+[your first service in Kotlin](first-service-kotlin.md),
 [your first service in Python](first-service-python.md),
-[your first service in TypeScript](first-service-typescript.md) or
+[your first service in TypeScript](first-service-typescript.md),
+[your first service in Go](first-service-go.md) or
 [your first service in Rust](first-service-rust.md).

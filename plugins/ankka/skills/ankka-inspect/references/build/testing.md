@@ -1,6 +1,6 @@
 # Testing
 
-> Test ankka components at two levels in Scala, Python, TypeScript and Rust, with unit test kits that run one component and nothing else, integration test kits that run the whole service against a real database, and scripted models.
+> Test ankka components at two levels in every language, with unit test kits that run one component and nothing else, integration test kits that run the whole service against a real database, and scripted models.
 
 Source: https://docs.ankka.cloud/build/testing/
 ankka services are tested at two levels, and both are real.
@@ -84,8 +84,61 @@ fn a_refused_command_persists_nothing() {
 }
 ```
 
-Scala names the handler with the typed value its companion declared; Python, TypeScript and Rust name it
-by its wire name or its handler reference. What each kit hands back differs a little by language.
+**Java**
+
+```java
+@Test
+void anItemAddedIsInTheCart() {
+  var cart = EventSourcedTestKit.of(ShoppingCart.class, "c1");
+  var result = cart.call(ShoppingCart::addItem, new LineItem("p1", "Pen", 2));
+  assertEquals(Done.DONE, result.reply());
+  assertEquals(List.of(new CartEvent.ItemAdded(new LineItem("p1", "Pen", 2))), result.events());
+  assertEquals(2, cart.state().totalQuantity());
+}
+```
+
+**Kotlin**
+
+```kotlin
+@Test
+fun `an item added is in the cart`() {
+    val cart = eventSourcedTestKit(ShoppingCart::class, "c1")
+    val result = cart.call(ShoppingCart::addItem, LineItem("p1", "Pen", 2))
+    assertEquals(Done.DONE, result.reply())
+    assertEquals(listOf<CartEvent>(CartEvent.ItemAdded(LineItem("p1", "Pen", 2))), result.events())
+    assertEquals(2, cart.state().totalQuantity)
+}
+```
+
+**Go**
+
+```go
+func TestAddingAndRemovingItems(t *testing.T) {
+	ctx := context.Background()
+	kit := testkit.EventSourced(cart.Entity, testkit.EntityID("c1"))
+	if r := kit.Command(ctx, "add-item", pen); r.Refusal() != nil || len(r.Events()) != 1 || r.Events()[0] != (cart.ItemAdded{Item: pen}) {
+		t.Fatalf("add-item answered %+v", r)
+	}
+	kit.Command(ctx, "add-item", ink)
+	if q := kit.Query(ctx, "total-quantity", ankka.Unit{}); q.Reply() != 3 {
+		t.Fatalf("the total is %v", q.Reply())
+	}
+	// Items are kept sorted by product, as the Scala sample keeps them.
+	if got := kit.State().Items; len(got) != 2 || got[0] != ink || got[1] != pen {
+		t.Fatalf("the items are %+v", got)
+	}
+	if r := kit.Command(ctx, "remove-item", "pen"); r.Refusal() != nil || r.Events()[0] != (cart.ItemRemoved{ProductID: "pen"}) {
+		t.Fatalf("remove-item answered %+v", r)
+	}
+	if got := kit.State(); got.CartID != "c1" || len(got.Items) != 1 || got.Items[0] != ink {
+		t.Fatalf("after removing, the cart is %+v", got)
+	}
+}
+```
+
+Scala names the handler with the typed value its companion declared; Java and Kotlin name it by a method
+reference (`ShoppingCart::addItem`); Python, TypeScript, Rust and Go name it by its wire name or its handler
+reference. What each kit hands back differs a little by language.
 
 ### What a Scala kit gives you
 
@@ -230,6 +283,30 @@ dispatch the module's exports use:
 A kit built `.with_service(build())` answers its component's calls to the service's event sourced
 entities in memory; without it those calls are refused.
 
+### What a Go kit gives you
+
+The package `github.com/thinkmorestupidless/ankka-go/testkit` holds a kit for each kind. They run under
+`go test` with no sidecar, database or network, and every call takes the test's `context.Context`:
+
+| Kit | Drives |
+|---|---|
+| `testkit.EventSourced(entity, opts...)` | `Command(ctx, wire, input)` and `Query`; the result has `Events()`, `State()`, `Reply()`, `Refusal()`, `Failure()`, `Deleted()`, `ExpireAfter()`; `testkit.EntityID(id)` names the entity |
+| `testkit.KeyValue(entity, opts...)` | the same, without events |
+| `testkit.Workflow(workflow, opts...)` | `Command` a command, `RunStep` a step, `RunUntilPause` and `Resume` to follow transitions, `Progress()` |
+| `testkit.View(view, opts...)` | `OnChange(ctx, subject, value, opts...)`, `OnDelete(ctx, subject)`, then `Row(subject)` or `Rows()`; `testkit.FromWorkflow(standing)` hands the change a workflow's standing |
+| `testkit.KeyedView(view, opts...)` | `Change(ctx, sourceID, subject, value)`, `Deleted(ctx, sourceID, subject)`, `Answering(name, fn)`, then `Row(key)` or `Rows()` |
+| `testkit.Consumer(consumer, opts...)` | `OnMessage(ctx, subject, message, opts...)`, `OnDelete(ctx, subject)`, each returning what it published with the record key each message named |
+| `testkit.GraphConsumer(consumer, opts...)` | `OnMessage` and `OnDelete`, each returning the deltas published, read back from their bytes |
+| `testkit.TimedAction(action, opts...)` | `Invoke(ctx, wire, input, metadata...)` |
+| `testkit.Agent(agent, session, model, opts...)` | `Ask`, `Stream` and `Decide`: a handler plus the loop the sidecar would run, against a `testkit.NewScriptedModel()` |
+| `testkit.Endpoint(endpoint, components...)` | `Get`, `Post`, `Put`, `Patch`, `Delete` against the routes, answering a `Response`; the components named answer the routes' calls in memory |
+| `testkit.Mcp(endpoint, components...)` | `Call(ctx, tool, arguments, principal)` on an MCP endpoint's tools |
+
+`testkit.Calling(components...)` gives an entity, workflow, view, consumer or timed action kit the components its handlers call. `ScriptedModel` scripts
+turns with `ExpectText`, `ExpectToolCall` and `ExpectRefusal`, and fails loudly when the script runs out.
+Every input, event, state, row and reply is round-tripped through the component's codecs, so a type the
+encoding cannot carry fails in the kit rather than on the first deployment.
+
 ## Testing a consumer
 
 A consumer's unit test hands it one change, with a subject and a sequence number, and reads back the
@@ -345,7 +422,8 @@ A [graph consumer](graph.md#testing-a-graph-consumer) has a kit of its own in ev
 returns elements rather than messages.
 
 A consumer that calls other components is given a client that answers: a `TestTransport` with stubs in
-Scala, a client double in Python and TypeScript, and a kit built `.with_service(build())` in Rust. With
+Scala, a client double in Python and TypeScript, a kit built `.with_service(build())` in Rust, and `testkit.Calling(...)` with the
+components it calls in Go. With
 none, the call is refused, the handler fails, and in a running service the change would be delivered
 again.
 
@@ -497,6 +575,106 @@ fn the_cart_through_the_runtime_survives_a_restart() {
 }
 ```
 
+**Java**
+
+```java
+@Test
+void anItemAddedOverHttpIsReadBackAfterARestart() throws Exception {
+  var added =
+      send(
+          HttpRequest.newBuilder(kit.http().resolve("/carts/c1/items"))
+              .header("Content-Type", "application/json")
+              .POST(HttpRequest.BodyPublishers.ofString(
+                  "{\"productId\":\"p1\",\"name\":\"Pen\",\"quantity\":2}")));
+  assertEquals(204, added.statusCode(), added.body());
+
+  kit.restartService();
+
+  var cart = send(HttpRequest.newBuilder(kit.http().resolve("/carts/c1")).GET());
+  assertEquals(200, cart.statusCode(), cart.body());
+  assertTrue(cart.body().contains("\"quantity\":2"), cart.body());
+}
+```
+
+**Kotlin**
+
+```kotlin
+@Test
+fun `an item added over HTTP is read back after a restart, and reaches the view`() =
+    ankkaTestKit(service()) {
+        val added =
+            send(
+                HttpRequest.newBuilder(http().resolve("/carts/c1/items"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("""{"productId":"p1","name":"Pen","quantity":2}"""))
+            )
+        assertEquals(204, added.statusCode(), added.body())
+
+        restartService()
+
+        val cart = send(HttpRequest.newBuilder(http().resolve("/carts/c1")).GET())
+        assertEquals(200, cart.statusCode(), cart.body())
+        assertTrue(cart.body().contains("\"quantity\":2"), cart.body())
+
+        runBlocking {
+            eventually {
+                val row = send(HttpRequest.newBuilder(http().resolve("/carts/c1/row")).GET())
+                assertEquals(200, row.statusCode(), row.body())
+                assertTrue(row.body().contains("\"p1\":2"), row.body())
+            }
+        }
+    }
+```
+
+**Go**
+
+```go
+func TestEveryRouteAgainstARealSidecar(t *testing.T) {
+	kit := testkit.StartT(t, cart.Service())
+	ctx := t.Context()
+	h := kit.HTTP()
+
+	r, err := h.Post(ctx, "/carts/s1/items", pen)
+	status(t, "POST items", r, err, 204)
+	r, err = h.Post(ctx, "/carts/s1/items", ink)
+	status(t, "POST items", r, err, 204)
+	r, err = h.Get(ctx, "/carts/s1/total")
+	status(t, "GET total", r, err, 200)
+	if r.Text() != "3" {
+		t.Fatalf("the total is %q", r.Text())
+	}
+	r, err = h.Delete(ctx, "/carts/s1/items/ink")
+	status(t, "DELETE an item", r, err, 204)
+	r, err = h.Delete(ctx, "/carts/s1/items/ink")
+	status(t, "DELETE an item not there", r, err, 404)
+	r, err = h.Post(ctx, "/carts/s1/items", cart.LineItem{ProductID: "pen", Name: "Pen", Quantity: 0})
+	status(t, "POST a zero quantity", r, err, 400)
+
+	if err := kit.Restart(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// The new sidecar answers on a new port.
+	h = kit.HTTP()
+	got, err := testkit.GetJSON[cart.Cart](ctx, h, "/carts/s1")
+	if err != nil || !reflect.DeepEqual(got, cart.Cart{CartID: "s1", Items: []cart.LineItem{pen}}) {
+		t.Fatalf("after a restart the cart is %+v (%v)", got, err)
+	}
+
+	r, err = h.Post(ctx, "/carts/s1/checkout", nil)
+	status(t, "checkout", r, err, 200)
+	r, err = h.Post(ctx, "/carts/s1/items", ink)
+	status(t, "POST to a checked out cart", r, err, 409)
+
+	r, err = h.Post(ctx, "/carts/s2/items", ink)
+	status(t, "POST items", r, err, 204)
+	r, err = h.Do(ctx, http.MethodDelete, "/carts/s2", nil, nil)
+	status(t, "discard", r, err, 204)
+	if got, err := testkit.GetJSON[cart.Cart](ctx, h, "/carts/s2"); err != nil || len(got.Items) != 0 {
+		t.Fatalf("after a discard the cart is %+v (%v)", got, err)
+	}
+}
+```
+
 `restartService()` stops the service and starts a new one against the same database, so every entity
 must rebuild itself from the journal. A test that passes across a restart has proved durability. One
 that does not restart has only proved that something was in memory.
@@ -536,11 +714,17 @@ A test of something that happens in time — a timer a week away, a schedule, an
 `startService()`, with other extensions if the service comes back changed; `restartService(extensions =
 …, whileStopped = …)` is the three in one. The kit's clients are not usable while the service is stopped.
 
+In Java and Kotlin the kit is the Scala one underneath: `AnkkaTestKit.start(service)` (in Kotlin,
+`ankkaTestKit(service) { … }`, which closes it) starts the whole service in the test's JVM against
+Postgres, and `restartService()` drops everything held in memory.
+
 In Python and TypeScript the kit starts the real sidecar image beside Postgres, serves your
 components from the test process, and drives the routes through the sidecar. `restart()` replaces the
 sidecar against the same database. Mark the Python tests `@pytest.mark.slow` and run them with
 `uv run pytest -m slow`; the TypeScript ones are skipped unless `ANKKA_SLOW=1` is set, so that neither
-suite needs Docker by default.
+suite needs Docker by default. The Go kit does the same: `testkit.StartT(t, service)` starts the sidecar
+and Postgres and stops them when the test ends, `Restart(ctx)` replaces the sidecar, and the test is
+skipped unless `ANKKA_SLOW=1` is set, as one that calls `testkit.Slow(t)` is.
 
 Mark such tests `@pytest.mark.slow` and run them with `uv run pytest -m slow`; `uv run pytest` runs the
 unit tests alone.
@@ -642,8 +826,8 @@ kit.replay(VehicleEvent.Created("v1"), VehicleEvent.StepAdded("frame"))
 ```
 
 As the home, `mode = EventSourcedTestKit.Mode.Home`, every command runs and the handover or change to
-the replication set a command asks for is on its result. Python, TypeScript and Rust have the same two
-modes; see [Event sourced entities](event-sourced-entities.md#testing-a-replicated-entity).
+the replication set a command asks for is on its result. Java (`EventSourcedTestKit.home` and
+`follower`), Kotlin, Python, TypeScript and Rust have the same two modes; see [Event sourced entities](event-sourced-entities.md#testing-a-replicated-entity).
 
 ## A test must be able to fail
 

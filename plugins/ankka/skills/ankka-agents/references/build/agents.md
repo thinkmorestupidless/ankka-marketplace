@@ -1,6 +1,6 @@
 # Agents
 
-> Write an agent in Scala, Python or TypeScript — instructions, tools, guardrails, session memory, structured replies and compaction — and configure the model it talks to.
+> Write an agent in Scala, Java, Kotlin, Python or TypeScript — instructions, tools, guardrails, session memory, structured replies and compaction — and configure the model it talks to.
 
 Source: https://docs.ankka.cloud/build/agents/
 An agent is a component that carries out a task by talking to a model. Its handler describes one
@@ -73,7 +73,7 @@ object CartAssistant extends Agent.Companion[CartAssistant](ComponentId("assista
    * the conversation. Nothing is wrong with a shopper *asking* about a key.
    */
   val noSecrets: Guardrail = new Guardrail:
-    val name = "no-secrets"
+    val name                                                     = "no-secrets"
     override def checkOutput(text: String): Either[String, Unit] =
       if text.contains("sk-") then Left("a key leaked") else Right(())
 
@@ -174,6 +174,174 @@ export class CartAssistant extends Agent {
     return cart.items.map((i) => `${i.quantity} x ${i.name}`).join(", ")
   }
 }
+```
+
+**Java**
+
+```java
+/** An agent whose tool reads a cart, one that refunds only once approved, and a guarded handler. */
+@ComponentId("cart-helper")
+public class CartHelper extends Agent {
+
+  /** What the refund tool refunded. */
+  public static final List<String> REFUNDED = new CopyOnWriteArrayList<>();
+
+  public record CartQuery(@Describe("the cart to read") String cartId) {}
+
+  public record Summary(String cartId, int items) {}
+
+  public static final class Tools {
+    private final ComponentClient client;
+
+    Tools(ComponentClient client) {
+      this.client = client;
+    }
+
+    @Tool(value = "cart_items", description = "How many items a cart holds")
+    public int items(CartQuery query) {
+      return client
+          .forEventSourcedEntity(query.cartId())
+          .call(ShoppingCart::getCart)
+          .invoke()
+          .items()
+          .size();
+    }
+
+    @Tool(value = "refund", description = "Refunds a cart", requiresApproval = true)
+    public String refund(CartQuery query) {
+      REFUNDED.add(query.cartId());
+      return "refunded " + query.cartId();
+    }
+  }
+
+  @Command("ask")
+  public AgentEffect<String> ask(String question) {
+    return effects()
+        .systemMessage("You help with carts.")
+        .userMessage(question)
+        .tools(new Tools(componentClient()))
+        .thenReply();
+  }
+
+  @Command("summarise")
+  public AgentEffect<Summary> summarise(String cartId) {
+    return effects().userMessage("Summarise cart " + cartId).thenReply(Summary.class);
+  }
+
+  @Command("short")
+  public AgentEffect<String> shortQuestion(String question) {
+    return effects()
+        .userMessage(question)
+        .guardrails(Guardrail.maxInputLength(10))
+        .thenReply();
+  }
+}
+```
+
+A handler is a method annotated `@Command` with its wire name, answering `AgentEffect<R>`; a tool is a
+method annotated `@Tool` on an object the handler offers, and a lone record parameter's components are
+the tool's arguments. Register the agent beside the agents module, which gives it its default model:
+
+```java
+/** The cart, the agent that helps with it and the one that answers questions about it. */
+public static ServiceBuilder service(ModelProvider model) {
+  return Ankka.service("shop")
+      .withModule(Agents.module().withModelProvider(model))
+      .register(ShoppingCart.class)
+      .register(CartHelper.class)
+      .register(CartAnswerer.class);
+}
+```
+
+**Kotlin**
+
+```kotlin
+data class Place(@Describe("the city to forecast") val city: String, val days: Int = 1)
+
+/** A tool class whose tool is a suspend fun taking a data class, built by its own constructor. */
+class WeatherTools {
+    @Tool("forecast", description = "The forecast for a city")
+    suspend fun forecast(place: Place): String {
+        delay(1)
+        ASKED.add("${place.city}/${place.days}")
+        return "${place.city}: 21C"
+    }
+
+    companion object {
+        val ASKED: MutableList<String> = CopyOnWriteArrayList()
+    }
+}
+
+/** An agent written as a Kotlin developer writes one: suspend handlers and the effects DSL. */
+@ComponentId("forecaster")
+class Forecaster : Agent() {
+    @Command("ask")
+    suspend fun ask(question: String): AgentEffect<String> {
+        delay(1)
+        return effects {
+            systemMessage("You answer questions about the weather.")
+                .userMessage(question)
+                .tools<WeatherTools>()
+                .thenReply()
+        }
+    }
+
+    @Command("structured")
+    fun structured(question: String): AgentEffect<Forecast> =
+        effects { userMessage(question).thenReply<Forecast>() }
+}
+```
+
+Kotlin uses the Java agent library: a handler and a tool may be a `suspend fun`, `effects { ... }` builds
+the interaction, and `thenReply<R>()` reads a data class.
+
+**Go**
+
+```go
+// LookupArguments are the lookup tool's.
+type LookupArguments struct {
+	ID string `json:"id"`
+}
+
+// lookup records under the id and answers how many things are recorded there.
+func lookup(mark, label string) func(context.Context, LookupArguments) (string, error) {
+	return func(ctx context.Context, in LookupArguments) (string, error) {
+		if in.ID == "" {
+			return "", errors.New("an id is needed")
+		}
+		if _, err := ankka.Invoke[string](ctx, "conformance", in.ID, "record", mark); err != nil {
+			return "", err
+		}
+		n, err := ankka.Invoke[int](ctx, "conformance", in.ID, "count", ankka.Unit{})
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s for %s is %d", label, in.ID, n), nil
+	}
+}
+
+var noSecrets = ankka.Guardrail("no-secrets", func(_ context.Context, stage ankka.GuardrailStage, text string) (string, error) {
+	if strings.Contains(text, "sk-") {
+		return string(stage) + " rejected by no-secrets", nil
+	}
+	return "", nil
+})
+
+func describe(_ context.Context, question string) (ankka.AgentEffect, error) {
+	return ankka.SystemMessage("You are helpful.").UserMessage(question).Tools("lookup").Guardrails("no-secrets").ThenReply(), nil
+}
+
+// Assistant is an agent whose tool acts through the client.
+var Assistant = ankka.Agent("assistant",
+	ankka.Tools(ankka.Tool("lookup", "Looks up how many things were recorded under an id.", lookup("looked-up", "count"))),
+	ankka.Guardrails(noSecrets),
+	ankka.Ask("ask", describe),
+	ankka.AskStream("stream", describe),
+	// Answered by the model the sidecar has under the name second, not its default.
+	ankka.Ask("ask-second", func(_ context.Context, question string) (ankka.AgentEffect, error) {
+		return ankka.AgentModel("second").SystemMessage("You are helpful.").UserMessage(question).ThenReply(), nil
+	}),
+)
 ```
 
 In Scala the class extends `Agent`, the companion registers the handlers under their wire names, and the
@@ -356,7 +524,7 @@ turn's last awaited decision, the turn goes on and `decide` answers as `ask` wou
 
 ```scala
 val session = componentClient.forAgent(SessionId("s-42"))
-val answer = session.ask(ApprovalAgent.ask).invoke("refund order o-7") match
+val answer  = session.ask(ApprovalAgent.ask).invoke("refund order o-7") match
   case AgentOutcome.Answered(text)             => text
   case AgentOutcome.AwaitingApproval(requests) =>
     // In a real service the requests are shown to a person, and the decision arrives later,
@@ -666,6 +834,31 @@ answer = await client.for_agent("assistant", "session-42").call("ask").invoke("w
 const answer = await client.of(CartAssistant, "session-42").call(CartAssistant.handlers.ask).invoke("what is in cart c1?")
 ```
 
+**Java**
+
+```java
+/** One turn of the session {@code session}: the model's answer, its tools run on the way. */
+public static String ask(ComponentClient client, String session, String question) {
+  return AgentClients.forAgent(client, session).call(CartHelper::ask).invoke(question);
+}
+```
+
+**Kotlin**
+
+```kotlin
+val reply = runBlocking {
+    kit.componentClient().forAgent("s-1").call(Forecaster::ask).invokeSuspending("How warm is Oslo?")
+}
+```
+
+**Go**
+
+```go
+ankka.Post("/ask/{session}", func(ctx context.Context, req *ankka.Request, question string) (string, error) {
+	return ankka.Invoke[string](ctx, "assistant", req.Param("session"), "ask", question)
+}),
+```
+
 Choose session ids to match conversations: one per chat, or one per workflow instance when several
 agents collaborate on one task. The [multi-agent orchestration](multi-agent-orchestration.md) guide uses
 the workflow's id.
@@ -691,7 +884,8 @@ The effect has the same shape as the Scala one, with each SDK's spelling:
 
 A tool that waits for a person is declared with `approval`: `Tool(..., approval=True)` or
 `Tool(..., approval=Approval(within=timedelta(minutes=30)))` in Python, `tool(..., run, { approval: true })`
-or `{ approval: { withinMs: 1_800_000 } }` in TypeScript. A caller asks for the outcome and decides
+or `{ approval: { withinMs: 1_800_000 } }` in TypeScript, and `ankka.ApprovedTool(name, description, within, run)` in Go, where a
+`within` of zero sets no limit. A caller asks for the outcome and decides
 through the same invocation:
 
 **Python**
@@ -721,7 +915,25 @@ decideApproval: post("/approver/{session}/decide/{id}", s.string, s.string, asyn
 ),
 ```
 
-`invoke` and `stream` raise (or reject with) `ApprovalAwaited` when the turn waits, and `stream_parts`
+**Go**
+
+```go
+// A turn that may wait: the model's answer, or the approval requests it waits on.
+ankka.Post("/approver/{session}", func(ctx context.Context, req *ankka.Request, question string) (string, error) {
+	return outcomeOf(ankka.Invoke[string](ctx, "approver", req.Param("session"), "ask", question))
+}),
+// A person's decision, answered as the turn's caller would have been once the turn goes on.
+ankka.Post("/approver/{session}/decide/{id}", func(ctx context.Context, req *ankka.Request, body string) (string, error) {
+	d, err := decisionOf(body)
+	if err != nil {
+		return "", err
+	}
+	return outcomeOf(ankka.DecideApproval[string](ctx, "approver", req.Param("session"), "ask", req.Param("id"), d))
+}),
+```
+
+`invoke` and `stream` raise (or reject with) `ApprovalAwaited` when the turn waits (in Go, `ankka.Invoke`
+returns an `*ankka.ApprovalAwaitedError` carrying the requests, and `ankka.DecideApproval` goes on), and `stream_parts`
 (`streamParts`) yields the text and then the awaited requests. An `@sse` (`sse`) route can pass those on
 as a server-sent event of its own name by yielding `SseEvent("approval", requests)` in Python or
 `sseEvent("approval", requests)` in TypeScript after the text: the value is sent as JSON, as the Scala
