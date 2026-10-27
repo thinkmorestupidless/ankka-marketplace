@@ -1,6 +1,6 @@
 {
   "name": "pr-review",
-  "version": "0.14.0",
+  "version": "0.14.1",
   "description": "Code review as skills: the general checklist every pull request is checked against, then the checklist of each language the diff touches (Scala, Java, Kotlin, Go, Python, Rust, TypeScript); findings labelled by severity with a verdict. Needs nothing from ankka.",
   "author": {
     "name": "thinkmorestupidless",
