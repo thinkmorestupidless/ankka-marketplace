@@ -14,7 +14,7 @@ The module is published at the same version as every ankka release, so pin the v
 you deploy to:
 
 ```bash
-go get github.com/thinkmorestupidless/ankka-go@v0.14.0
+go get github.com/thinkmorestupidless/ankka-go@v0.16.0
 ```
 
 The floor is Go 1.26. A service runs with the standard toolchain, `go run .`, and builds to one static
@@ -107,7 +107,7 @@ var Events = ankka.Cases[Event](
 | a struct | a JSON object, every field written, in declaration order |
 | an interface with registered cases | the case's object with `"type": "<Case>"` |
 | a named string type with registered values | `{"type": "Ready"}`; a bare string is accepted on read |
-| `ankka.Done` | the empty `done` payload, the reply of a handler that answers only that it finished |
+| `ankka.Done` | the empty `done` payload, the reply of a handler that answers only that it finished; a route that answers it answers 204 with no body |
 | `ankka.Unit` | the empty `unit` payload, the input of a handler that takes nothing |
 
 The encoding is exactly what the Scala, Java, Kotlin, Python, TypeScript and Rust SDKs write, so one journal is
@@ -153,8 +153,8 @@ The Go API differs from the other SDKs' in four deliberate ways:
   persists does not compile.
 - **The empty state is a function of the entity id**, `func(entityID string) S`, so a state can carry its
   own id from the start.
-- **There is no personal-data envelope.** The erasable envelope the Scala SDK carries has no Go
-  counterpart.
+- **`ankka.Personal[T]` is the personal-data envelope.** A field of that type is about one data subject and
+  reads as erased once the subject is, as in every SDK; [Personal data](../build/personal-data.md) shows it.
 
 `ankka.NewService(declarations…)` takes every component in any order. Registration is explicit;
 `Start` refuses before it binds anything when the declarations have problems, naming every one at
@@ -172,7 +172,8 @@ once, and `Problems()` returns them for a test.
 | Replication | `ankka.Replicated()`; `.HandOverTo(installation)`, `.ReplicateTo(installation)`, `.StopReplicatingTo(installation)` on `Persist`; `ankka.EventFrom(ctx)` inside an apply given with `ApplyWithContext`: `Installation`, `Local` |
 
 ```go
-// Entity is the shopping cart: the same wire names and manifests as the Scala sample's.
+// Entity is the shopping cart: the same wire names and manifests as the Scala sample's. The
+// string each handler is registered under is its wire name, separate from the Go function's.
 var Entity = ankka.EventSourced[Cart, Event](ComponentID, Events, Empty, Apply,
 	ankka.Command("add-item", addItem),
 	ankka.Command("remove-item", removeItem),
@@ -184,15 +185,20 @@ var Entity = ankka.EventSourced[Cart, Event](ComponentID, Events, Empty, Apply,
 	ankka.Query("total-quantity", func(_ context.Context, c Cart, _ ankka.Unit) (ankka.ReadOnlyEffect[int], error) {
 		return ankka.Reply(TotalQuantity(c)), nil
 	}),
+	// A JSON codec derived from the type, under the manifest the journal records it by.
 	ankka.StateCodec(ankka.CodecFor[Cart](ankka.Manifest("shopping-cart"))),
 	ankka.EventCodec(ankka.CodecFor[Event](ankka.Manifest("shopping-cart-event"))),
 	ankka.SnapshotEvery(3),
 )
 
+
 var checkedOut = ankka.Refuse(ankka.Conflict, "cart is already checked out")
 
 func done(Cart) ankka.Done { return ankka.Done{} }
 
+
+// addItem describes what should happen: a refusal is a returned error and nothing is persisted; an
+// accepted item is an event the runtime persists before it replies.
 func addItem(_ context.Context, c Cart, item LineItem) (effect[ankka.Done], error) {
 	if c.CheckedOut {
 		return effect[ankka.Done]{}, checkedOut
@@ -202,6 +208,7 @@ func addItem(_ context.Context, c Cart, item LineItem) (effect[ankka.Done], erro
 	}
 	return ankka.Persist[Cart, Event, ankka.Done](ItemAdded{Item: item}).ThenReply(done), nil
 }
+
 
 func removeItem(_ context.Context, c Cart, productID string) (effect[ankka.Done], error) {
 	if c.CheckedOut {
@@ -224,8 +231,11 @@ func checkout(_ context.Context, c Cart, _ ankka.Unit) (effect[Cart], error) {
 	return ankka.Persist[Cart, Event, Cart](CheckedOut{}).ThenReplyState(), nil
 }
 
-// discard persists the event, then deletes the cart, so a consumer downstream sees the discard
-// rather than a cart that vanished; the same id then starts again empty.
+
+// discard records the discard and then deletes the cart, so the same id starts again empty. The
+// event is persisted before the deletion takes effect, so a consumer or view downstream still
+// observes that this cart was discarded rather than merely vanishing. A checked-out cart is a
+// record of an order and is not discarded.
 func discard(_ context.Context, c Cart, _ ankka.Unit) (effect[ankka.Done], error) {
 	if c.CheckedOut {
 		return effect[ankka.Done]{}, checkedOut
@@ -1132,6 +1142,7 @@ A sidecar older than something the service declares is refused at discovery, nam
 | `testkit.Agent(agent, session, testkit.NewScriptedModel())` | An agent's plan, tools and guardrails, against a scripted model that fails when the script runs out |
 | `testkit.Endpoint(endpoint, components…)`, `testkit.Mcp(endpoint, components…)` | An endpoint's routes, or an MCP endpoint's tools, with no sidecar |
 | `testkit.Calling(components…)`, `testkit.AnswerService(name, answer)` | Options of the component kits: the components a handler calls, and the answer a call to another service gets; a call to a service no `AnswerService` names fails as unresolvable |
+| `testkit.AgentCalling(components…)`, `testkit.AgentAnswering(name, answer)` | The same two options for the agent kit, for the components and services an agent's tools call |
 | `testkit.StartT(t, service)` | The whole service through the real sidecar image and a throwaway Postgres; `Restart(ctx)` starts a new sidecar on the same database; skipped unless `ANKKA_SLOW=1` |
 
 ```go
@@ -1164,8 +1175,8 @@ SDK's own version. See [Testing](../build/testing.md).
 
 ## The version and the development build
 
-`ankka.Version()` is the SDK's version as the service's build recorded it, without the `v`: `0.14.0` for
-a service that depends on `v0.14.0`. It is `0.0.0` for a development build, when the dependency is
+`ankka.Version()` is the SDK's version as the service's build recorded it, without the `v`: `1.2.3` for
+a service that depends on `v1.2.3`. It is `0.0.0` for a development build, when the dependency is
 replaced by a local directory, when the SDK is itself the main module, or when the build recorded
 nothing. The service reports the version to the sidecar at discovery, and the integration test kit reads
 it to choose the sidecar image. Nothing in the module carries a version of its own.

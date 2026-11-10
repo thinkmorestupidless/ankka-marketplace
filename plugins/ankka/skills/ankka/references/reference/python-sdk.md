@@ -17,11 +17,11 @@ The SDK is on PyPI as [`ankka`](https://pypi.org/project/ankka/). Every ankka re
 at the same version, so pin the version of the platform you deploy to:
 
 ```bash
-uv add "ankka==0.5.0"                   # the SDK
-uv add "ankka[testkit]==0.5.0"          # with the integration testkit's dependencies
+uv add "ankka==0.16.0"                   # the SDK
+uv add "ankka[testkit]==0.16.0"          # with the integration testkit's dependencies
 ```
 
-`pip install ankka==0.5.0` does the same for a project that does not use uv. To work against an unreleased
+`pip install ankka==0.16.0` does the same for a project that does not use uv. To work against an unreleased
 SDK, install it from a checkout of the ankka repository instead, by path (`uv add --editable
 /path/to/ankka/sdks/python`), after generating its protocol stubs as described under
 [Developing the SDK](#developing-the-sdk).
@@ -320,7 +320,7 @@ Locally, run the sidecar with `docker compose --profile polyglot up -d` from the
 | `TimedActionTestKit.of(Cls)` | `ankka.testkit` | A timed action's handlers. |
 | `AgentTestKit.of(Cls, session_id, model=ScriptedModel())` | `ankka.testkit` | An agent's plan, tools and guardrails, against a scripted model. |
 | `EndpointTestKit.of(Cls, …)` | `ankka.testkit` | An endpoint's routes, with no sidecar. |
-| `AnkkaTestKit.start(builder)` | `ankka.testkit.integration` | The whole service through the real sidecar image and a throwaway Postgres. `restart()` starts a new sidecar on the same database. |
+| `AnkkaTestKit.start(builder)` | `ankka.testkit.integration` | The whole service through the real sidecar image and a throwaway Postgres. `restart()` starts a new sidecar on the same database; `kit.caller_headers(caller)` makes a request to `kit.http` arrive as that caller, so a route's caller rules apply. |
 
 Unit testkits need nothing running and still round-trip every value through its codec. See
 [Testing](../build/testing.md).
