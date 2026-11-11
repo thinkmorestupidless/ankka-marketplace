@@ -575,13 +575,28 @@ AnkkaTestKit.start(service).use { kit ->
 ```
 
 A timer a week away need not take a week: give the runtime a clock the test moves, and the sweeper, the
-timers it sets and every handler's `clock` move with it. The clock moves forward only.
+timers it sets and every handler's `clock` move with it. So does every workflow's pause: its deadline is
+set by that clock, and the pause ends when the test moves the clock past it, whether the workflow is
+awake, passivated or restarted. The clock moves forward only.
 
 **Scala**
 
 ```scala
 private val clock  = MovableClock.at(Instant.parse("2026-10-11T18:00:00Z"))
 private val timers = TimerRuntime(pollInterval = 200.millis, clock = clock)
+```
+
+**Java**
+
+```java
+var clock = MovableClock.at(Instant.parse("2026-11-10T09:00:00Z"));
+var settings = Settings.defaults().withClock(clock);
+try (var kit = AnkkaTestKit.start(Ankka.service("timers").register(CartTimers.class), settings)) {
+  kit.timers().schedule("expire-c-9", Duration.ofHours(1), CartTimers::expire, "c-9");
+```
+
+```java
+clock.moveBy(Duration.ofHours(1));
 ```
 
 Another extension that needs the same clock finds the timer runtime by type:

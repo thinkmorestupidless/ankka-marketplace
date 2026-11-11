@@ -616,16 +616,18 @@ See [Personal data and erasure](../build/personal-data.md) and [Erasure on the p
   its tools, guardrails and task type rules with no loop; the TypeScript and Go kits have no autonomous
   agent kit at all. Test the loop through a sidecar with `ANKKA_MODEL_SCRIPT`, as the Python SDK's
   integration test kit does. The Java SDK's `TestModelProvider` scripts one for Java and Kotlin.
-- **The Scala test kit has the most.** `MovableClock`, `TimerProbe`, `GherkinSuite`, `LogCapturing`,
-  `FakeSecretManager`, `InMemoryBroker` and `InMemoryPublisher` are its alone: in every other kit a timer
-  fires when its due time arrives on the wall clock, a scenario is a test of the language's own runner,
+- **The Scala test kit has the most.** `TimerProbe`, `GherkinSuite`, `LogCapturing`,
+  `FakeSecretManager`, `InMemoryBroker` and `InMemoryPublisher` are its alone, and `MovableClock` is its
+  and the Java and Kotlin kit's: in every other kit a timer fires when its due time arrives on the wall
+  clock, a scenario is a test of the language's own runner,
   and what a consumer publishes is read from the unit kit or from a real broker. Every other integration
   kit starts one installation, so replication between installations is tested in Scala. The Java and
   Kotlin unit kits hold no secret store (`AnkkaTestKit.secrets()` reads one) and their integration kit
   declares no bucket; the TypeScript and Go kits cannot name a caller, so an ACL that names callers is
   proved where a cluster issues certificates; the Go integration kit captures no consumer publications
   and reads no store, and the Go unit kits have no secret store. A module has no integration kit: its
-  end-to-end behaviour is the conformance suite's.
+  end-to-end behaviour is the conformance suite's, and its unit kit answers a route's calls to its
+  entities alone, so a workflow or an agent behind a route tests as unavailable.
 - **The Java SDK cannot script a judgment.** Its test kits script a model (`TestModelProvider`) but not a
   judgment provider, and a `JudgmentProvider` is only one `JudgmentProviders` builds, so a Java test of a
   judgment or a judged guardrail needs Jev itself; nor do they hold an MCP server of their own, so a test of
