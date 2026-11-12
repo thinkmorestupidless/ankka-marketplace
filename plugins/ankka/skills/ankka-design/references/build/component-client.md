@@ -22,8 +22,8 @@ The client is addressed first by kind and instance, then by handler:
 ```scala
 val cart = componentClient.forEventSourcedEntity(EntityId("cart-1"))
 
-cart.call(ShoppingCartEntity.addItem).invoke(LineItem("p1", "Widget", 2))   // Done
-cart.call(ShoppingCartEntity.getCart).invoke()                              // ShoppingCart
+cart.call(ShoppingCartEntity.addItem).invoke(LineItem("p1", "Widget", 2)) // Done
+cart.call(ShoppingCartEntity.getCart).invoke()                            // ShoppingCart
 ```
 
 **Java**
@@ -60,7 +60,7 @@ state = await cart.call("get-cart").invoke(reply=ShoppingCart)          # decode
 const cart = client.of(ShoppingCartEntity, "cart-1")
 
 await cart.call(ShoppingCartEntity.handlers.addItem).invoke({ productId: "p1", name: "Widget", quantity: 2 })
-await cart.call(ShoppingCartEntity.handlers.getCart).invoke()          // ShoppingCart
+const state = await cart.call(ShoppingCartEntity.handlers.getCart).invoke() // ShoppingCart
 ```
 
 **Rust**
@@ -139,9 +139,9 @@ component by its id and the handler by its wire name, and every call is awaited.
 
 | Addresses | Scala | Python | TypeScript |
 |---|---|---|---|
-| an event sourced entity instance | `forEventSourcedEntity(entityId)` | `for_event_sourced_entity(component_id, entity_id)` | `of(Entity, entityId)` |
+| an event sourced entity instance | `forEventSourcedEntity(entityId)`; `replication(companion)` for how a replicated copy stands | `for_event_sourced_entity(component_id, entity_id)`; `replication()` for how a replicated copy stands | `of(Entity, entityId)`; `replication()` for how a replicated copy stands |
 | a key value entity instance | `forKeyValueEntity(entityId)` | `for_key_value_entity(component_id, entity_id)` | `of(Entity, entityId)` |
-| a workflow instance | `forWorkflow(workflowId)`; `lifecycle(companion)` for the engine's state; `awaitEnd(companion, timeout)` and `call(command).thenAwaitEnd(timeout)` to wait for its end | `for_workflow(component_id, workflow_id)`; `await_end(timeout, reply=…)` and `call(name).then_await_end(timeout)` | `of(Workflow, workflowId)`; `awaitEnd(timeoutMillis)` and `call(handler).thenAwaitEnd(timeoutMillis)` |
+| a workflow instance | `forWorkflow(workflowId)`; `lifecycle(companion)` for the engine's state; `awaitEnd(companion, timeout)` and `call(command).thenAwaitEnd(timeout)` to wait for its end | `for_workflow(component_id, workflow_id)`; `lifecycle()` for the engine's state; `await_end(timeout, reply=…)` and `call(name).then_await_end(timeout)` | `of(Workflow, workflowId)`; `lifecycle()` for the engine's state; `awaitEnd(timeoutMillis)` and `call(handler).thenAwaitEnd(timeoutMillis)` |
 | an agent session | `forAgent(sessionId)`, with `import com.thinkmorestupidless.ankka.agent.*` | `for_agent(component_id, session_id)` | `of(Agent, sessionId)` |
 | a view's rows | the view client; see [Views](views.md) | `views.get(view_id, key, Row)`, `views.all(view_id, Row)` | `views.get(viewId, key, Row)`, `views.all(viewId, Row)` |
 | timers | the timer scheduler; see [Timers](timers.md) | `timers.schedule(...)`, `timers.cancel(timer_id)` | `timers.schedule(...)`, `timers.cancel(timerId)` |
@@ -180,7 +180,10 @@ stays readable and costs nothing to wait.
 
 ```scala
 val pending = cartIds.map(id =>
-  componentClient.forEventSourcedEntity(EntityId(id)).call(ShoppingCartEntity.totalQuantity).invokeAsync()
+  componentClient
+    .forEventSourcedEntity(EntityId(id))
+    .call(ShoppingCartEntity.totalQuantity)
+    .invokeAsync()
 )
 val totals = pending.map(ComponentClient.await(_, 10.seconds))
 ```
@@ -264,7 +267,7 @@ A component that refuses a command returns an error effect with a code. The call
 
 ```scala
 try cart.call(ShoppingCartEntity.addItem).invoke(LineItem("p1", "Widget", 0))
-catch case e: CommandError if e.code == ErrorCode.BadRequest => ...
+catch case e: CommandError if e.code == ErrorCode.BadRequest => Done
 ```
 
 **Java**
@@ -483,7 +486,7 @@ passing the request's metadata to the client:
 **Scala**
 
 ```scala
-post("/{cartId}/checkouts") { (cartId: String, mode: String) =>
+postBody("/{cartId}/checkouts") { (cartId: String, mode: String) =>
   // The request's context is already on this thread, so the call joins its trace.
   client.forWorkflow(EntityId(cartId)).call(CheckoutWorkflow.start).invoke(mode)
 }

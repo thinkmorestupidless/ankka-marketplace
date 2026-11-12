@@ -25,12 +25,15 @@ sidecar. `call` runs a handler and returns what the effect it produced would hav
 **Scala**
 
 ```scala
-val kit    = EventSourcedTestKit.of(ShoppingCartEntity, "cart-1")
-val result = kit.call(ShoppingCartEntity.addItem)(LineItem("p1", "Widget", 2))
+test("adding an item persists exactly one event and acknowledges") {
+  val kit    = EventSourcedTestKit.of(ShoppingCartEntity, "cart-1")
+  val result = kit.call(ShoppingCartEntity.addItem)(LineItem("p1", "Widget", 2))
 
-assertEquals(result.replyValue, Done)
-assertEquals(result.events, Vector(ItemAdded(LineItem("p1", "Widget", 2))))
-assertEquals(kit.currentState.totalQuantity, 2)
+  assertEquals(result.replyValue, Done)
+  assertEquals(result.events, Vector(ItemAdded(LineItem("p1", "Widget", 2))))
+  assertEquals(result.eventOfType[ItemAdded].item.quantity, 2)
+  assertEquals(kit.currentState.totalQuantity, 2)
+}
 ```
 
 **Java**
@@ -62,11 +65,10 @@ fun `an item added is in the cart`() {
 **Python**
 
 ```python
-from ankka.testkit import EventSourcedTestKit
-
-kit = EventSourcedTestKit.of(ShoppingCartEntity, "c1")
-assert kit.call("add-item", LineItem("p1", "Pen", 2)).events == (ItemAdded(LineItem("p1", "Pen", 2)),)
-assert kit.call("get-cart").reply.items[0].name == "Pen"
+def test_an_item_added_is_in_the_cart() -> None:
+    kit = EventSourcedTestKit.of(ShoppingCartEntity, "c1")
+    assert kit.call("add-item", LineItem("p1", "Pen", 2)).events == (ItemAdded(LineItem("p1", "Pen", 2)),)
+    assert kit.call("get-cart").reply.items[0].name == "Pen"
 ```
 
 **TypeScript**
@@ -165,10 +167,15 @@ with `changed` on the result instead of `events`:
 **Scala**
 
 ```scala
-val kit    = KeyValueEntityTestKit.of(ProfileEntity, "user-1")
-val result = kit.call(ProfileEntity.register)(Profile("Ada", "ada@example.com", 1))
-assert(result.changed)
-assertEquals(kit.currentState, Profile("Ada", "ada@example.com", 1))
+test("recording a checkout replaces the value and acknowledges") {
+  val kit    = KeyValueEntityTestKit.of(CheckoutLog, "c1")
+  val result = kit.call(CheckoutLog.record)(1_700_000_000_000L)
+
+  assertEquals(result.replyValue, Done)
+  assert(result.changed, "recording should write a new value")
+  assertEquals(result.state.at, 1_700_000_000_000L)
+  assertEquals(result.state.notified, true)
+}
 ```
 
 **Java**
@@ -260,8 +267,12 @@ test, naming it:
 
 ```scala
 val kit = KeyedViewTestKit(Shipments)
-kit.answering(Shipments.ofCustomer)(values => kit.rows.values.filter(_.customer.contains(values("customer"))).toVector)
-kit.change(Shipments.customers, "c1", CustomerRenamed("Ada"))
+kit.change(Shipments.shipments, "s1", script(Scripts.Op.Touch(Vector("s1"), Some("c1"))))
+kit.change(Shipments.shipments, "s2", script(Scripts.Op.Touch(Vector("s2"), Some("c1"))))
+kit.answering(Shipments.ofCustomer)(values =>
+  kit.rows.values.filter(_.customer.contains(values("customer"))).toVector
+)
+kit.change(Shipments.customers, "c1", script(Scripts.Op.TouchHolding("c1")))
 ```
 
 **Java**
@@ -936,6 +947,91 @@ loopback with `ScriptedService.start()` and gives its address to
 `AnkkaTestKit.start(…, localServices = Map(name -> scripted.address))`. See
 [Calling other services](calling-services.md).
 
+## Testing a component that reads a standing
+
+A component that reads a workflow's standing or how a replicated copy stands is told the answer in a unit
+test, as the runtime would give it, and a read the test did not answer is refused, naming the workflow or
+entity: a unit test runs no workflow it does not drive. Python gives a `ClientStub` to the kit as its
+client, TypeScript a `stubClient`, Go the `testkit.AnswerLifecycle` and `testkit.AnswerReplication`
+options (`testkit.EndpointWith` for an endpoint), and Rust `with_lifecycle` and `with_replication` on the
+kit, which otherwise answers from the workflows it runs in memory.
+
+**Python**
+
+```python
+def test_the_checkout_lifecycle_route_answers_the_engines_view() -> None:
+    from ankka import Lifecycle, Status
+    from ankka.testkit import ClientStub, EndpointTestKit
+    from examples.shopping_cart.endpoint import ShoppingCartEndpoint
+
+    failed = Lifecycle(Status.FAILED, "charge", {"charge": 1}, "the card was refused")
+    client = ClientStub().lifecycle("checkout", "c1", failed).lifecycle("checkout", "c2", Lifecycle(Status.RUNNING, "reserve", {}, None))
+    kit = EndpointTestKit(ShoppingCartEndpoint(client))
+    assert kit.request("GET", "/carts/c1/checkouts/lifecycle").body == b"Failed: the card was refused"
+    assert kit.request("GET", "/carts/c2/checkouts/lifecycle").body == b"Running"
+```
+
+**TypeScript**
+
+```ts
+test("the checkout's lifecycle route answers the engine's view, and why it failed", async () => {
+  const client = stubClient({
+    lifecycle: [
+      ["checkout", "c1", { status: "failed", pendingStep: "charge", retries: { charge: 1 }, failure: "the card was refused" }],
+      ["checkout", "c2", { status: "running", pendingStep: "reserve", retries: {} }],
+    ],
+  })
+  const kit = EndpointTestKit.of(ShoppingCartEndpoint, client)
+  assert.equal((await kit.get("/carts/c1/checkouts/lifecycle")).text(), "failed: the card was refused")
+  assert.equal((await kit.get("/carts/c2/checkouts/lifecycle")).text(), "running")
+})
+```
+
+**Rust**
+
+```rust
+#[test]
+fn a_transfers_lifecycle_answers_the_engines_view() {
+    let failed = Lifecycle {
+        failure: Some("the bank was shut".into()),
+        ..Lifecycle::of(WorkflowStatus::Failed)
+    };
+    let mut kit =
+        EndpointTestKit::<TransferApi>::new().with_lifecycle(TransferWorkflow, "t1", failed);
+    assert_eq!(
+        kit.get("/transfers/t1/lifecycle").text(),
+        "Failed: the bank was shut"
+    );
+    // A transfer the kit runs is read from where it got to.
+    let mut t2 = kit.workflow::<TransferWorkflow>("t2");
+    assert_eq!(kit.get("/transfers/t2/lifecycle").text(), "NotStarted");
+    t2.command("start", transfer(5));
+    assert_eq!(kit.get("/transfers/t2/lifecycle").text(), "Running");
+}
+```
+
+**Go**
+
+```go
+func TestTheLifecycleRouteSaysWhyAQuoteFailed(t *testing.T) {
+	ctx := context.Background()
+	failure := "nothing to price"
+	kit := testkit.EndpointWith(QuoteEndpoint,
+		testkit.AnswerLifecycle("quote", "q-1", ankka.WorkflowLifecycle{Status: ankka.Failed, Failure: &failure}),
+		testkit.AnswerLifecycle("quote", "q-2", ankka.WorkflowLifecycle{Status: ankka.Running}))
+	defer kit.Close()
+	if r := kit.Get(ctx, "/quotes/q-1/lifecycle"); r.Text() != "Failed: nothing to price" {
+		t.Fatalf("a failed quote answered %d %q", r.Status, r.Text())
+	}
+	if r := kit.Get(ctx, "/quotes/q-2/lifecycle"); r.Text() != "Running" {
+		t.Fatalf("a running quote answered %d %q", r.Status, r.Text())
+	}
+}
+```
+
+A test of the whole service reads both from what the runtime records, in every language; see
+[Integration testing](#integration-testing).
+
 ## Integration testing
 
 An integration test kit starts the whole service against a throwaway Postgres in Docker and drives it
@@ -945,21 +1041,37 @@ across a restart has proved durability rather than caching:
 **Scala**
 
 ```scala
-class ShoppingCartIntegrationSuite extends munit.FunSuite:
+class ShoppingCartIntegrationSuite extends munit.FunSuite with LogCapturing:
+
+  override val munitTimeout = 3.minutes
+
   private var testKit: AnkkaTestKit = null
 
-  override def beforeAll(): Unit = testKit = AnkkaTestKit.start(ShoppingCartEntity.descriptor)
-  override def afterAll(): Unit  = if testKit != null then testKit.stop()
+  override def beforeAll(): Unit =
+    testKit = AnkkaTestKit.start(ShoppingCartEntity.descriptor)
 
-  private def cart(id: String) = testKit.componentClient.forEventSourcedEntity(EntityId(id))
+  override def afterAll(): Unit =
+    if testKit != null then testKit.stop()
+
+  private def cart(id: String) =
+    testKit.componentClient.forEventSourcedEntity(EntityId(id))
 
   test("state survives losing every entity from memory") {
-    cart("c1").call(ShoppingCartEntity.addItem).invoke(LineItem("p1", "Widget", 5))
-    val before = cart("c1").call(ShoppingCartEntity.getCart).invoke()
+    val id = "cart-replay"
+    val _  = cart(id).call(ShoppingCartEntity.addItem).invoke(LineItem("p1", "Widget", 5))
+    val _  = cart(id).call(ShoppingCartEntity.addItem).invoke(LineItem("p1", "Widget", 2))
+    val _  = cart(id).call(ShoppingCartEntity.removeItem).invoke("p1")
+    val _  = cart(id).call(ShoppingCartEntity.addItem).invoke(LineItem("p3", "Doohickey", 4))
 
+    val before = cart(id).call(ShoppingCartEntity.getCart).invoke()
+
+    // Nothing is cached across this: a whole new actor system, and every entity must
+    // rebuild itself from its journal.
     testKit.restartService()
 
-    assertEquals(cart("c1").call(ShoppingCartEntity.getCart).invoke(), before)
+    val after = cart(id).call(ShoppingCartEntity.getCart).invoke()
+    assertEquals(after, before, "replayed state must equal the state before restart")
+    assertEquals(after.totalQuantity, 4)
   }
 ```
 
@@ -1190,9 +1302,10 @@ while running the tests would otherwise see `Address already in use`:
 **Scala**
 
 ```scala
-val server  = HttpServer.at("127.0.0.1", 0)(clients => ShoppingCartEndpoint(clients.componentClient))
-val testKit = AnkkaTestKit.start(Seq(ShoppingCartEntity.descriptor), Seq(server))
-val baseUrl = s"http://127.0.0.1:${server.boundPort.get}"
+// Port 0 so concurrent test runs cannot collide.
+server = HttpServer.at("127.0.0.1", 0)(clients => ShoppingCartEndpoint(clients.componentClient))
+testKit = AnkkaTestKit.start(Seq(ShoppingCartEntity.descriptor), Seq(server))
+baseUrl = s"http://127.0.0.1:${server.boundPort.getOrElse(fail("server did not bind"))}"
 ```
 
 **Kotlin**
@@ -1250,7 +1363,7 @@ fails. Mix `LogCapturing` into a munit suite to hold that log back:
 ```scala
 import com.thinkmorestupidless.ankka.testkit.LogCapturing
 
-class ShoppingCartIntegrationSuite extends munit.FunSuite with LogCapturing
+class QuietCartSuite extends munit.FunSuite with LogCapturing:
 ```
 
 While the suite runs, everything logged through logback's root logger is held in memory. A test that
@@ -1299,6 +1412,7 @@ try
   val status = atB.replication(Fleet.vehicles)
   assertEquals(status.home, Some("smoke-a"))
   assertEquals(status.replicationSet, Set("smoke-a", "smoke-b"))
+  assert(status.position > 0L) // how many records this copy holds
 finally fleet.stopAll()
 ```
 
@@ -1628,8 +1742,8 @@ test whose model quietly returned a default would no longer be testing what it s
 
 ```scala
 val model = TestModelProvider()
-  .expectToolCall("get_weather", Json.obj("location" -> Json.str("Lisbon")))
-  .expectText("Lisbon is 18C and sunny.")
+  .expectToolCall("get_weather", Json.obj("location" -> Json.str("Oslo")))
+  .expectText("Oslo: 18C and sunny")
 ```
 
 **Java**
@@ -2087,7 +2201,8 @@ import com.thinkmorestupidless.ankka.agent.openai.OpenAiProvider
 val standIn = ModelStandIn.start()
 standIn.answer(ModelResponse("Paris"))
 val local = OpenAiProvider.at("local", s"${standIn.address}/v1", "qwen3:8b")
-// … call it, then assert on standIn.lastRequest.body
+val reply = Await.result(local.complete(question("The capital of France?")), 30.seconds)
+assertEquals(standIn.lastRequest.body("model").flatMap(_.asString), Some("qwen3:8b"))
 standIn.close()
 ```
 
